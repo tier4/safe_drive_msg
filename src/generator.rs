@@ -1,5 +1,5 @@
 use crate::{
-    parser::{self, ArrayInfo, Expr, TypeName},
+    parser::{self, ArrayInfo, Expr, TypeName, ValueType},
     DynError, SafeDrive,
 };
 use convert_case::{Case, Casing};
@@ -9,7 +9,7 @@ use std::{
     collections::{BTreeSet, VecDeque},
     fs::File,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Clone)]
@@ -29,6 +29,8 @@ impl<'a> Generator<'a> {
     }
 
     pub fn generate(&mut self, out_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
+        // TODO: check already generated
+
         self.generate_depth(out_dir, path, lib)?;
         self.generate_crate(out_dir, lib)?;
 
@@ -51,6 +53,16 @@ impl<'a> Generator<'a> {
             for msg in self.msgs.iter() {
                 msg_file.write_fmt(format_args!("pub mod {msg};\n"))?;
                 msg_file.write_fmt(format_args!("pub use {msg}::*;\n\n"))?;
+            }
+        }
+
+        if !self.srvs.is_empty() {
+            lib_file.write_fmt(format_args!("pub mod srv;\n"))?;
+
+            let mut srv_file = File::create(src_dir.join("srv.rs"))?;
+            for srv in self.srvs.iter() {
+                srv_file.write_fmt(format_args!("pub mod {srv};\n"))?;
+                srv_file.write_fmt(format_args!("pub use {srv}::*;\n\n"))?;
             }
         }
 
@@ -90,10 +102,8 @@ safe_drive = {safe_drive_dep}
                 // file
                 if let Some(ext) = path.extension() {
                     match ext.to_str() {
-                        Some("msg") => {
-                            self.generate_msg(out_dir, path, lib)?;
-                        }
-                        Some("srv") => todo!(),
+                        Some("msg") => self.generate_msg(out_dir, path, lib)?,
+                        Some("srv") => self.generate_srv(out_dir, path, lib)?,
                         _ => (),
                     }
                 }
@@ -106,15 +116,8 @@ safe_drive = {safe_drive_dep}
     }
 
     fn generate_msg(&mut self, out_lib_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
-        // TODO: check already generated
-
         // Read.
-        let contents = {
-            let mut f = File::open(path)?;
-            let mut c = String::new();
-            f.read_to_string(&mut c)?;
-            c
-        };
+        let contents = read_file(path)?;
 
         // Parse.
         let exprs = match parser::parse_msg(&contents).finish() {
@@ -126,54 +129,24 @@ safe_drive = {safe_drive_dep}
             }
         };
 
-        // "{CamelFileName}.msg" to "{snake_file_name}.rs"
-        let names: Vec<_> = path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .split(".")
-            .collect();
-        let camel_file_name = names[0];
-        let snake_file_name = camel_file_name.to_case(Case::Snake);
-        let snake_file_name = mangle(&snake_file_name);
-
-        // "{snake_file_name}.rs"
-        let rs_file_name = format!("{snake_file_name}.rs");
-        let rs_file_name = Path::new(&rs_file_name);
-
-        self.msgs.insert(snake_file_name.into());
-
-        // "{CamelFileName}"
-        let rs_type_name = camel_file_name.to_string();
-
-        let out_dir = out_lib_dir.join(lib).join("src").join("msg");
-
-        // Create a directory.
-        std::fs::create_dir_all(&out_dir)?;
-
-        let out_file = out_dir.join(rs_file_name);
+        let (rs_module, rs_file, rs_type_name) = module_file_type(path)?;
+        self.msgs.insert(rs_module.into());
 
         let mut lines = VecDeque::<Cow<'static, str>>::new();
 
+        // extern "C"
         lines.push_back(gen_c_extern_msg(lib, &rs_type_name).into());
 
-        lines.push_back("#[repr(C)]".into());
-        lines.push_back("#[derive(Debug)]".into());
-        lines.push_back(format!("pub struct {rs_type_name} {{").into());
+        gen_exprs(&exprs, &mut lines, lib, &rs_type_name, MsgType::Msg);
 
-        if exprs.is_empty() {
-            lines.push_back("    _structure_needs_at_least_one_member: u8;".into());
-        } else {
-            for expr in exprs {
-                gen_member(&expr, &mut lines);
-            }
-        }
-
-        lines.push_back("}".into());
-        lines.push_back(gen_impl(lib, &rs_type_name, MsgType::Msg).into());
         lines.push_back(gen_impl_for_msg(lib, &rs_type_name).into());
 
+        // Create a directory.
+        let out_dir = out_lib_dir.join(lib).join("src").join("msg");
+        std::fs::create_dir_all(&out_dir)?;
+
+        // Write.
+        let out_file = out_dir.join(&rs_file);
         let mut f = File::create(out_file)?;
         for line in lines {
             f.write_fmt(format_args!("{}\n", line))?;
@@ -181,6 +154,114 @@ safe_drive = {safe_drive_dep}
 
         Ok(())
     }
+
+    fn generate_srv(&mut self, out_lib_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
+        // Read.
+        let contents = read_file(path)?;
+
+        // Parse.
+        let (exprs_req, exprs_resp) = match parser::parse_srv(&contents).finish() {
+            Ok((_, exprs)) => exprs,
+            Err(e) => {
+                eprintln!("{}", convert_error(contents.as_str(), e));
+                let msg = format!("failed to parse: {}", path.display());
+                return Err(msg.into());
+            }
+        };
+
+        println!("{}: {:?}", path.display(), exprs_req);
+
+        let (rs_module, rs_file, rs_type_name) = module_file_type(path)?;
+        self.srvs.insert(rs_module.into());
+
+        let mut lines = VecDeque::new();
+
+        // extern "C"
+        lines.push_back(gen_c_extern_srv(lib, &rs_type_name).into());
+
+        gen_exprs(
+            &exprs_req,
+            &mut lines,
+            lib,
+            &rs_type_name,
+            MsgType::SrvRequest,
+        );
+
+        gen_exprs(
+            &exprs_resp,
+            &mut lines,
+            lib,
+            &rs_type_name,
+            MsgType::SrvResponse,
+        );
+
+        lines.push_back(gen_impl_for_srv(lib, &rs_type_name).into());
+
+        // Create a directory.
+        let out_dir = out_lib_dir.join(lib).join("src").join("srv");
+        std::fs::create_dir_all(&out_dir)?;
+
+        // Write.
+        let out_file = out_dir.join(&rs_file);
+        let mut f = File::create(out_file)?;
+        for line in lines {
+            f.write_fmt(format_args!("{}\n", line))?;
+        }
+
+        Ok(())
+    }
+}
+
+fn gen_exprs(
+    exprs: &[Expr],
+    lines: &mut VecDeque<Cow<'static, str>>,
+    lib: &str,
+    rs_type_name: &str,
+    msg_type: MsgType,
+) {
+    let struct_name = match &msg_type {
+        MsgType::Msg => rs_type_name.to_string(),
+        MsgType::SrvRequest => format!("{rs_type_name}Request"),
+        MsgType::SrvResponse => format!("{rs_type_name}Response"),
+    };
+
+    gen_struct(exprs, &struct_name, lines);
+
+    lines.push_back(gen_impl(lib, &rs_type_name, msg_type).into());
+}
+
+fn read_file(path: &Path) -> Result<String, DynError> {
+    // Read.
+    let contents = {
+        let mut f = File::open(path)?;
+        let mut c = String::new();
+        f.read_to_string(&mut c)?;
+        c
+    };
+    Ok(contents)
+}
+
+fn module_file_type(path: &Path) -> Result<(String, PathBuf, String), DynError> {
+    // "{CamelFileName}.msg" to "{snake_file_name}.rs"
+    let names: Vec<_> = path
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(".")
+        .collect();
+    let camel_file_name = names[0];
+    let module_name = camel_file_name.to_case(Case::Snake);
+    let module_name = mangle(&module_name);
+
+    // "{snake_file_name}.rs"
+    let rs_file = format!("{module_name}.rs");
+    let rs_file = Path::new(&rs_file);
+
+    // "{CamelFileName}"
+    let rs_type_name = camel_file_name.to_string();
+
+    Ok((module_name.to_string(), rs_file.to_owned(), rs_type_name))
 }
 
 fn mangle(var_name: &str) -> Cow<'_, str> {
@@ -192,83 +273,115 @@ fn mangle(var_name: &str) -> Cow<'_, str> {
     }
 }
 
-fn gen_member(expr: &Expr, lines: &mut VecDeque<Cow<'static, str>>) {
-    if let Expr::Variable {
-        type_name,
-        var_name,
-        value: _,
-        comment: _,
-    } = expr
-    {
-        let line = match type_name {
-            TypeName::Type {
-                type_name,
-                array_info,
-            } => match array_info {
-                ArrayInfo::NotArray => {
-                    format!("    {var_name}: {};", gen_type(type_name.as_str()))
-                }
-                ArrayInfo::Dynamic => {
-                    let type_name = gen_seq_type(&type_name, 0);
-                    format!("    {var_name}: {type_name};")
-                }
-                ArrayInfo::Limited(size) => {
-                    let type_name = gen_seq_type(&type_name, *size);
-                    format!("    {var_name}: {type_name};")
-                }
-                ArrayInfo::Static(size) => format!("    {var_name}: [{type_name}; {size}];"),
-            },
-            TypeName::ScopedType {
-                scope,
-                type_name,
-                array_info,
-            } => match array_info {
-                ArrayInfo::NotArray => format!("    {var_name}: {scope}::msg::{type_name};"),
-                ArrayInfo::Dynamic => {
-                    let type_name = gen_seq_type(&type_name, 0);
-                    format!("    {var_name}: {scope}::msg::{type_name};")
-                }
-                ArrayInfo::Limited(size) => {
-                    let type_name = gen_seq_type(&type_name, *size);
-                    format!("    {var_name}: {scope}::msg::{type_name};")
-                }
-                ArrayInfo::Static(size) => format!("    {var_name}: [{type_name}; {size}];"),
-            },
-            TypeName::LimitedString {
-                size: str_len,
-                array_info,
-            } => match array_info {
-                ArrayInfo::NotArray => {
-                    format!("    {var_name}: safe_drive::msg::RosString<{str_len}>;")
-                }
-                ArrayInfo::Dynamic => {
-                    format!("    {var_name}: safe_drive::msg::RosStringSeq<{str_len}, 0>;")
-                }
-                ArrayInfo::Limited(size) => {
-                    format!("    {var_name}: safe_drive::msg::RosStringSeq<{str_len}, {size}>;")
-                }
-                ArrayInfo::Static(size) => {
-                    format!("    {var_name}: [safe_drive::msg::RosString<{str_len}>; {size}];")
-                }
-            },
-            TypeName::String(array_info) => match array_info {
-                ArrayInfo::NotArray => {
-                    format!("    {var_name}: safe_drive::msg::RosString<0>;")
-                }
-                ArrayInfo::Dynamic => {
-                    format!("    {var_name}: safe_drive::msg::RosStringSeq<0, 0>;")
-                }
-                ArrayInfo::Limited(size) => {
-                    format!("    {var_name}: safe_drive::msg::RosStringSeq<0, {size}>;")
-                }
-                ArrayInfo::Static(size) => {
-                    format!("    {var_name}: [safe_drive::msg::RosString<0>; {size}];")
-                }
-            },
-        };
-
-        lines.push_back(line.into());
+fn gen_member(type_name: &TypeName, var_name: &str) -> String {
+    match type_name {
+        TypeName::Type {
+            type_name,
+            array_info,
+        } => match array_info {
+            ArrayInfo::NotArray => {
+                format!("    {var_name}: {};", gen_type(type_name.as_str()))
+            }
+            ArrayInfo::Dynamic => {
+                let type_name = gen_seq_type(&type_name, 0);
+                format!("    {var_name}: {type_name};")
+            }
+            ArrayInfo::Limited(size) => {
+                let type_name = gen_seq_type(&type_name, *size);
+                format!("    {var_name}: {type_name};")
+            }
+            ArrayInfo::Static(size) => {
+                format!("    {var_name}: [{type_name}; {size}];")
+            }
+        },
+        TypeName::ScopedType {
+            scope,
+            type_name,
+            array_info,
+        } => match array_info {
+            // TODO: add this to dependencies
+            ArrayInfo::NotArray => {
+                format!("    {var_name}: {scope}::msg::{type_name};")
+            }
+            ArrayInfo::Dynamic => {
+                let type_name = gen_seq_type(&type_name, 0);
+                format!("    {var_name}: {scope}::msg::{type_name};")
+            }
+            ArrayInfo::Limited(size) => {
+                let type_name = gen_seq_type(&type_name, *size);
+                format!("    {var_name}: {scope}::msg::{type_name};")
+            }
+            ArrayInfo::Static(size) => {
+                format!("    {var_name}: [{scope}::msg::{type_name}; {size}];")
+            }
+        },
+        TypeName::LimitedString {
+            size: str_len,
+            array_info,
+        } => match array_info {
+            ArrayInfo::NotArray => {
+                format!("    {var_name}: safe_drive::msg::RosString<{str_len}>;")
+            }
+            ArrayInfo::Dynamic => {
+                format!("    {var_name}: safe_drive::msg::RosStringSeq<{str_len}, 0>;")
+            }
+            ArrayInfo::Limited(size) => {
+                format!("    {var_name}: safe_drive::msg::RosStringSeq<{str_len}, {size}>;")
+            }
+            ArrayInfo::Static(size) => {
+                format!("    {var_name}: [safe_drive::msg::RosString<{str_len}>; {size}];")
+            }
+        },
+        TypeName::String(array_info) => match array_info {
+            ArrayInfo::NotArray => {
+                format!("    {var_name}: safe_drive::msg::RosString<0>;")
+            }
+            ArrayInfo::Dynamic => {
+                format!("    {var_name}: safe_drive::msg::RosStringSeq<0, 0>;")
+            }
+            ArrayInfo::Limited(size) => {
+                format!("    {var_name}: safe_drive::msg::RosStringSeq<0, {size}>;")
+            }
+            ArrayInfo::Static(size) => {
+                format!("    {var_name}: [safe_drive::msg::RosString<0>; {size}];")
+            }
+        },
     }
+}
+
+fn gen_struct(exprs: &[Expr], struct_name: &str, lines: &mut VecDeque<Cow<'static, str>>) {
+    lines.push_back("#[repr(C)]".into());
+    lines.push_back("#[derive(Debug)]".into());
+    lines.push_back(format!("pub struct {struct_name} {{").into());
+
+    let mut num_member = 0;
+
+    for expr in exprs.iter() {
+        match expr {
+            Expr::Variable {
+                type_name,
+                var_name,
+                value: Some(ValueType::Const(const_value)),
+                comment: _,
+            } => todo!(),
+            Expr::Variable {
+                type_name,
+                var_name,
+                ..
+            } => {
+                let line = gen_member(type_name, var_name);
+                lines.push_back(line.into());
+                num_member += 1;
+            }
+            _ => (),
+        };
+    }
+
+    if num_member == 0 {
+        lines.push_back("    _structure_needs_at_least_one_member: u8;".into());
+    }
+
+    lines.push_back("}".into());
 }
 
 fn gen_seq_type(type_str: &str, size: usize) -> String {
@@ -284,7 +397,11 @@ fn gen_seq_type(type_str: &str, size: usize) -> String {
         "uint64" => format!("safe_drive::msg::U64Seq<{size}>"),
         "float32" => format!("safe_drive::msg::F32Seq<{size}>"),
         "float64" => format!("safe_drive::msg::F64Seq<{size}>"),
-        _ => format!("{type_str}Seq<{size}>"),
+        _ => {
+            let mod_file = type_str.to_case(Case::Snake);
+            let mod_file = mangle(&mod_file);
+            format!("crate::msg::{mod_file}::{type_str}Seq<{size}>").into()
+        }
     }
 }
 
@@ -304,7 +421,7 @@ fn gen_type(type_str: &str) -> Cow<'_, str> {
         _ => {
             let mod_file = type_str.to_case(Case::Snake);
             let mod_file = mangle(&mod_file);
-            format!("super::{mod_file}::{type_str}").into()
+            format!("crate::msg::{mod_file}::{type_str}").into()
         }
     }
 }
@@ -313,14 +430,14 @@ fn gen_type(type_str: &str) -> Cow<'_, str> {
 enum MsgType {
     Msg,
     SrvRequest,
-    SrvResonse,
+    SrvResponse,
 }
 
 fn gen_impl(module_name: &str, type_name: &str, msg_type: MsgType) -> String {
     let (mid, c_func_mid, type_name_full) = match msg_type {
         MsgType::Msg => ("msg", "", format!("{type_name}")),
         MsgType::SrvRequest => ("srv", "_Request", format!("{type_name}Request")),
-        MsgType::SrvResonse => ("srv", "_Response", format!("{type_name}Response")),
+        MsgType::SrvResponse => ("srv", "_Response", format!("{type_name}Response")),
     };
 
     format!(
@@ -468,6 +585,82 @@ impl<const N: usize> PartialEq for {type_name}Seq<N> {{
             {module_name}__msg__{type_name}__Sequence__are_equal(&msg1, &msg2)
         }}
     }}
+}}
+"
+    )
+}
+
+fn gen_impl_for_srv(module_name: &str, type_name: &str) -> String {
+    format!(
+        "
+pub struct {type_name};
+
+impl ServiceMsg for {type_name} {{
+    type Request = {type_name}Request;
+    type Response = {type_name}Response;
+    fn type_support() -> *const rcl::rosidl_service_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_service_type_support_handle__{module_name}__srv__{type_name}()
+        }}
+    }}
+}}
+
+impl PartialEq for {type_name}Request {{
+    fn eq(&self, other: &Self) -> bool {{
+        unsafe {{
+            {module_name}__srv__{type_name}_Request__are_equal(self, other)
+        }}
+    }}
+}}
+
+impl PartialEq for {type_name}Response {{
+    fn eq(&self, other: &Self) -> bool {{
+        unsafe {{
+            {module_name}__srv__{type_name}_Response__are_equal(self, other)
+        }}
+    }}
+}}
+
+impl<const N: usize> PartialEq for {type_name}RequestSeq<N> {{
+    fn eq(&self, other: &Self) -> bool {{
+        unsafe {{
+            let msg1 = {type_name}RequestSeqRaw{{data: self.data, size: self.size, capacity: self.capacity}};
+            let msg2 = {type_name}RequestSeqRaw{{data: other.data, size: other.size, capacity: other.capacity}};
+            {module_name}__srv__{type_name}_Request__Sequence__are_equal(&msg1, &msg2)
+        }}
+    }}
+}}
+
+impl<const N: usize> PartialEq for {type_name}ResponseSeq<N> {{
+    fn eq(&self, other: &Self) -> bool {{
+        unsafe {{
+            let msg1 = {type_name}ResponseSeqRaw{{data: self.data, size: self.size, capacity: self.capacity}};
+            let msg2 = {type_name}ResponseSeqRaw{{data: other.data, size: other.size, capacity: other.capacity}};
+            {module_name}__srv__{type_name}_Response__Sequence__are_equal(&msg1, &msg2)
+        }}
+    }}
+}}
+"
+    )
+}
+
+fn gen_c_extern_srv(module_name: &str, type_name: &str) -> String {
+    format!(
+        "
+extern \"C\" {{
+    fn {module_name}__srv__{type_name}_Request__init(msg: *mut {type_name}Request) -> bool;
+    fn {module_name}__srv__{type_name}_Request__fini(msg: *mut {type_name}Request);
+    fn {module_name}__srv__{type_name}_Request__Sequence__init(msg: *mut {type_name}RequestSeqRaw, size: usize) -> bool;
+    fn {module_name}__srv__{type_name}_Request__Sequence__fini(msg: *mut {type_name}RequestSeqRaw);
+    fn {module_name}__srv__{type_name}_Response__init(msg: *mut {type_name}Response) -> bool;
+    fn {module_name}__srv__{type_name}_Response__fini(msg: *mut {type_name}Response);
+    fn {module_name}__srv__{type_name}_Response__Sequence__init(msg: *mut {type_name}ResponseSeqRaw, size: usize) -> bool;
+    fn {module_name}__srv__{type_name}_Response__Sequence__fini(msg: *mut {type_name}ResponseSeqRaw);
+    fn {module_name}__srv__{type_name}_Request__are_equal(lhs: *const {type_name}Request, rhs: *const {type_name}Request) -> bool;
+    fn {module_name}__srv__{type_name}_Response__are_equal(lhs: *const {type_name}Response, rhs: *const {type_name}Response) -> bool;
+    fn {module_name}__srv__{type_name}_Request__Sequence__are_equal(lhs: *const {type_name}RequestSeqRaw, rhs: *const {type_name}RequestSeqRaw) -> bool;
+    fn {module_name}__srv__{type_name}_Response__Sequence__are_equal(lhs: *const {type_name}ResponseSeqRaw, rhs: *const {type_name}ResponseSeqRaw) -> bool;
+    fn rosidl_typesupport_c__get_service_type_support_handle__{module_name}__srv__{type_name}() -> *const rcl::rosidl_service_type_support_t;
 }}
 "
     )

@@ -65,4 +65,14 @@ mod tests {
         )
         .unwrap();
     }
+
+    #[test]
+    fn std_srvs() {
+        depends(
+            "/tmp/safe_drive_msg",
+            &["std_srvs"],
+            SafeDrive::Version("0.1"),
+        )
+        .unwrap();
+    }
 }
