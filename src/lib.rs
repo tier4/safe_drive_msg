@@ -17,7 +17,7 @@ pub enum SafeDrive<'a> {
     Version(&'a str),
 }
 
-pub fn depends(outdir: &str, libs: &[&str], safe_drive: SafeDrive) -> Result<(), DynError> {
+pub fn depends(outdir: &Path, libs: &[&str], safe_drive: SafeDrive) -> Result<(), DynError> {
     let ament_paths = std::env::var("AMENT_PREFIX_PATH")?;
     let ament_paths: Vec<_> = ament_paths
         .split(":")
@@ -26,7 +26,6 @@ pub fn depends(outdir: &str, libs: &[&str], safe_drive: SafeDrive) -> Result<(),
 
     let libs: BTreeSet<_> = libs.iter().map(|e| e.to_string()).collect();
 
-    let outdir = std::path::Path::new(outdir);
     std::fs::create_dir_all(outdir)?;
 
     generate_libs(outdir, &ament_paths, &libs, safe_drive)
@@ -81,7 +80,7 @@ mod tests {
     #[test]
     fn std_msgs() {
         depends(
-            "/tmp/safe_drive_msg",
+            Path::new("/tmp/safe_drive_msg"),
             &["std_msgs"],
             SafeDrive::Path("/home/yuukitakano/program/safe_drive"),
         )
@@ -91,7 +90,7 @@ mod tests {
     #[test]
     fn std_srvs() {
         depends(
-            "/tmp/safe_drive_msg",
+            Path::new("/tmp/safe_drive_msg"),
             &["std_srvs"],
             SafeDrive::Path("/home/yuukitakano/program/safe_drive"),
         )
