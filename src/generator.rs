@@ -525,10 +525,13 @@ fn gen_impl(module_name: &str, type_name: &str, msg_type: MsgType) -> String {
     format!(
         "
 impl {type_name_full} {{
-    pub fn new() -> Self {{
+    pub fn new() -> Option<Self> {{
         let mut msg: Self = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
-        unsafe {{ {module_name}__{mid}__{type_name}{c_func_mid}__init(&mut msg) }};
-        msg
+        if unsafe {{ {module_name}__{mid}__{type_name}{c_func_mid}__init(&mut msg) }} {{
+            Some(msg)
+        }} else {{
+            None
+        }}
     }}
 }}
 
