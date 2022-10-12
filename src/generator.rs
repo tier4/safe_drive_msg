@@ -299,6 +299,7 @@ safe_drive = {safe_drive_dep}
                     format!("{var_name}: {type_name}")
                 }
                 ArrayInfo::Static(size) => {
+                    let type_name = gen_type(type_name.as_str());
                     format!("{var_name}: [{type_name}; {size}]")
                 }
             },
