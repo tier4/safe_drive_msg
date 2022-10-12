@@ -381,7 +381,7 @@ safe_drive = {safe_drive_dep}
                     comment: _,
                 } => {
                     let var = self.generate_var(type_name, var_name);
-                    lines.push_front(format!("const {var} = {const_value};").into());
+                    lines.push_front(format!("pub const {var} = {const_value};").into());
                 }
                 Expr::Variable {
                     type_name,
@@ -389,7 +389,7 @@ safe_drive = {safe_drive_dep}
                     ..
                 } => {
                     let var = self.generate_var(type_name, var_name);
-                    lines.push_back(format!("    {var},").into());
+                    lines.push_back(format!("    pub {var},").into());
                     num_member += 1;
                 }
                 _ => (),
