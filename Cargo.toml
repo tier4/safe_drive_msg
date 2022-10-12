@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 nom = "7"
 convert_case = "0.6"
+checksumdir = "0.3"

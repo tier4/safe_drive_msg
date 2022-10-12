@@ -16,6 +16,7 @@ use std::{
 pub struct Generator<'a> {
     msgs: BTreeSet<String>,
     srvs: BTreeSet<String>,
+    pub(crate) dependencies: BTreeSet<String>,
     safe_drive: SafeDrive<'a>,
 }
 
@@ -24,15 +25,31 @@ impl<'a> Generator<'a> {
         Self {
             msgs: Default::default(),
             srvs: Default::default(),
+            dependencies: Default::default(),
             safe_drive,
         }
     }
 
     pub fn generate(&mut self, out_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
-        // TODO: check already generated
+        // Read checksum.
+        let cksum = checksumdir::checksumdir(path.to_str().unwrap())?;
+        let cksum_file = out_dir.join(lib).join("cksum");
+        if let Ok(mut f) = File::open(&cksum_file) {
+            let mut buf = String::new();
+            f.read_to_string(&mut buf)?;
 
-        self.generate_depth(out_dir, path, lib)?;
+            if buf == cksum {
+                return Ok(()); // already generated and it is the latest
+            }
+        }
+
+        self.generate_recursive(out_dir, path, lib)?;
         self.generate_crate(out_dir, lib)?;
+
+        // Write checksum.
+        if let Ok(mut f) = File::create(cksum_file) {
+            let _ = f.write(cksum.as_bytes());
+        }
 
         Ok(())
     }
@@ -67,9 +84,47 @@ impl<'a> Generator<'a> {
         }
 
         // Cargo.toml
+        self.generate_cargo_toml(out_dir, lib)?;
+
+        // build.rs
+        self.generate_build_rs(out_dir, lib)?;
+
+        Ok(())
+    }
+
+    fn generate_build_rs(&self, out_dir: &Path, lib: &str) -> Result<(), DynError> {
+        let mut build_rs = File::create(out_dir.join(lib).join("build.rs"))?;
+
+        build_rs.write_fmt(format_args!(
+            r#"fn main() {{
+    println!("cargo:rustc-link-lib={lib}__rosidl_typesupport_c");
+    println!("cargo:rustc-link-lib={lib}__rosidl_generator_c");
+
+    if let Some(e) = std::env::var_os("AMENT_PREFIX_PATH") {{
+        let env = e.to_str().unwrap();
+        for path in env.split(':') {{
+            println!("cargo:rustc-link-search={{path}}/lib");
+        }}
+    }}
+}}
+"#
+        ))?;
+
+        Ok(())
+    }
+
+    fn generate_cargo_toml(&self, out_dir: &Path, lib: &str) -> Result<(), DynError> {
+        let ros2ver = std::env::var("ROS_DISTRO")?;
+
         let safe_drive_dep = match &self.safe_drive {
-            SafeDrive::Path(s) => format!("{{ path = \"{s}\" }}"),
-            SafeDrive::Version(s) => format!(r#""{s}""#),
+            SafeDrive::Path(s) => {
+                format!(
+                    "{{ path = \"{s}\", default-features = false, features = [\"{ros2ver}\"] }}"
+                )
+            }
+            SafeDrive::Version(s) => format!(
+                "{{ version = \"{s}\", default-features = false, features = [\"{ros2ver}\"] }}"
+            ),
         };
 
         let mut cargo_toml = File::create(out_dir.join(lib).join("Cargo.toml"))?;
@@ -86,16 +141,30 @@ safe_drive = {safe_drive_dep}
 "#,
         ))?;
 
+        for dependency in self.dependencies.iter() {
+            let path = out_dir.join(dependency);
+            cargo_toml.write_fmt(format_args!(
+                r#"{dependency} = {{ path = "{}" }}
+"#,
+                path.to_str().unwrap()
+            ))?;
+        }
+
         Ok(())
     }
 
-    fn generate_depth(&mut self, out_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
+    fn generate_recursive(
+        &mut self,
+        out_dir: &Path,
+        path: &Path,
+        lib: &str,
+    ) -> Result<(), DynError> {
         if let Ok(metadata) = path.metadata() {
             if metadata.is_dir() {
                 // directory
                 for file in std::fs::read_dir(path)? {
                     if let Ok(file) = file {
-                        self.generate_depth(out_dir, &file.path(), lib)?;
+                        self.generate_recursive(out_dir, &file.path(), lib)?;
                     }
                 }
             } else if metadata.is_file() {
@@ -108,7 +177,8 @@ safe_drive = {safe_drive_dep}
                     }
                 }
             } else if metadata.is_symlink() {
-                todo!()
+                let path = std::fs::read_link(path)?;
+                self.generate_recursive(out_dir, &path, lib)?;
             }
         }
 
@@ -137,9 +207,10 @@ safe_drive = {safe_drive_dep}
         // extern "C"
         lines.push_back(gen_c_extern_msg(lib, &rs_type_name).into());
 
-        gen_exprs(&exprs, &mut lines, lib, &rs_type_name, MsgType::Msg);
+        self.generate_exprs(&exprs, &mut lines, lib, &rs_type_name, MsgType::Msg);
 
         lines.push_back(gen_impl_for_msg(lib, &rs_type_name).into());
+        lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
 
         // Create a directory.
         let out_dir = out_lib_dir.join(lib).join("src").join("msg");
@@ -169,8 +240,6 @@ safe_drive = {safe_drive_dep}
             }
         };
 
-        println!("{}: {:?}", path.display(), exprs_req);
-
         let (rs_module, rs_file, rs_type_name) = module_file_type(path)?;
         self.srvs.insert(rs_module.into());
 
@@ -179,7 +248,7 @@ safe_drive = {safe_drive_dep}
         // extern "C"
         lines.push_back(gen_c_extern_srv(lib, &rs_type_name).into());
 
-        gen_exprs(
+        self.generate_exprs(
             &exprs_req,
             &mut lines,
             lib,
@@ -187,7 +256,7 @@ safe_drive = {safe_drive_dep}
             MsgType::SrvRequest,
         );
 
-        gen_exprs(
+        self.generate_exprs(
             &exprs_resp,
             &mut lines,
             lib,
@@ -196,6 +265,7 @@ safe_drive = {safe_drive_dep}
         );
 
         lines.push_back(gen_impl_for_srv(lib, &rs_type_name).into());
+        lines.push_front("use safe_drive::{msg::ServiceMsg, rcl};".into());
 
         // Create a directory.
         let out_dir = out_lib_dir.join(lib).join("src").join("srv");
@@ -210,24 +280,147 @@ safe_drive = {safe_drive_dep}
 
         Ok(())
     }
-}
 
-fn gen_exprs(
-    exprs: &[Expr],
-    lines: &mut VecDeque<Cow<'static, str>>,
-    lib: &str,
-    rs_type_name: &str,
-    msg_type: MsgType,
-) {
-    let struct_name = match &msg_type {
-        MsgType::Msg => rs_type_name.to_string(),
-        MsgType::SrvRequest => format!("{rs_type_name}Request"),
-        MsgType::SrvResponse => format!("{rs_type_name}Response"),
-    };
+    fn generate_var(&mut self, type_name: &TypeName, var_name: &str) -> String {
+        match type_name {
+            TypeName::Type {
+                type_name,
+                array_info,
+            } => match array_info {
+                ArrayInfo::NotArray => {
+                    format!("{var_name}: {}", gen_type(type_name.as_str()))
+                }
+                ArrayInfo::Dynamic => {
+                    let type_name = gen_seq_type(&type_name, 0);
+                    format!("{var_name}: {type_name}")
+                }
+                ArrayInfo::Limited(size) => {
+                    let type_name = gen_seq_type(&type_name, *size);
+                    format!("{var_name}: {type_name}")
+                }
+                ArrayInfo::Static(size) => {
+                    format!("{var_name}: [{type_name}; {size}]")
+                }
+            },
+            TypeName::ScopedType {
+                scope,
+                type_name,
+                array_info,
+            } => {
+                self.dependencies.insert(scope.clone());
 
-    gen_struct(exprs, &struct_name, lines);
+                match array_info {
+                    ArrayInfo::NotArray => {
+                        format!("{var_name}: {scope}::msg::{type_name}")
+                    }
+                    ArrayInfo::Dynamic => {
+                        let type_name = gen_seq_type(&type_name, 0);
+                        format!("{var_name}: {scope}::msg::{type_name}")
+                    }
+                    ArrayInfo::Limited(size) => {
+                        let type_name = gen_seq_type(&type_name, *size);
+                        format!("{var_name}: {scope}::msg::{type_name}")
+                    }
+                    ArrayInfo::Static(size) => {
+                        format!("{var_name}: [{scope}::msg::{type_name}; {size}]")
+                    }
+                }
+            }
+            TypeName::LimitedString {
+                size: str_len,
+                array_info,
+            } => match array_info {
+                ArrayInfo::NotArray => {
+                    format!("{var_name}: safe_drive::msg::RosString<{str_len}>")
+                }
+                ArrayInfo::Dynamic => {
+                    format!("{var_name}: safe_drive::msg::RosStringSeq<{str_len}, 0>")
+                }
+                ArrayInfo::Limited(size) => {
+                    format!("{var_name}: safe_drive::msg::RosStringSeq<{str_len}, {size}>")
+                }
+                ArrayInfo::Static(size) => {
+                    format!("{var_name}: [safe_drive::msg::RosString<{str_len}>; {size}]")
+                }
+            },
+            TypeName::String(array_info) => match array_info {
+                ArrayInfo::NotArray => {
+                    format!("{var_name}: safe_drive::msg::RosString<0>")
+                }
+                ArrayInfo::Dynamic => {
+                    format!("{var_name}: safe_drive::msg::RosStringSeq<0, 0>")
+                }
+                ArrayInfo::Limited(size) => {
+                    format!("{var_name}: safe_drive::msg::RosStringSeq<0, {size}>")
+                }
+                ArrayInfo::Static(size) => {
+                    format!("{var_name}: [safe_drive::msg::RosString<0>; {size}]")
+                }
+            },
+        }
+    }
 
-    lines.push_back(gen_impl(lib, &rs_type_name, msg_type).into());
+    fn generate_struct(
+        &mut self,
+        exprs: &[Expr],
+        struct_name: &str,
+        lines: &mut VecDeque<Cow<'static, str>>,
+    ) {
+        lines.push_back("#[repr(C)]".into());
+        lines.push_back("#[derive(Debug)]".into());
+        lines.push_back(format!("pub struct {struct_name} {{").into());
+
+        let mut num_member = 0;
+
+        for expr in exprs.iter() {
+            match expr {
+                Expr::Variable {
+                    type_name,
+                    var_name,
+                    value: Some(ValueType::Const(const_value)),
+                    comment: _,
+                } => {
+                    let var = self.generate_var(type_name, var_name);
+                    lines.push_front(format!("const {var} = {const_value};").into());
+                }
+                Expr::Variable {
+                    type_name,
+                    var_name,
+                    ..
+                } => {
+                    let var = self.generate_var(type_name, var_name);
+                    lines.push_back(format!("    {var},").into());
+                    num_member += 1;
+                }
+                _ => (),
+            };
+        }
+
+        if num_member == 0 {
+            lines.push_back("    _structure_needs_at_least_one_member: u8,".into());
+        }
+
+        lines.push_back("}".into());
+    }
+
+    fn generate_exprs(
+        &mut self,
+        exprs: &[Expr],
+        lines: &mut VecDeque<Cow<'static, str>>,
+        lib: &str,
+        rs_type_name: &str,
+        msg_type: MsgType,
+    ) {
+        let struct_name = match &msg_type {
+            MsgType::Msg => rs_type_name.to_string(),
+            MsgType::SrvRequest => format!("{rs_type_name}Request"),
+            MsgType::SrvResponse => format!("{rs_type_name}Response"),
+        };
+
+        self.generate_struct(exprs, &struct_name, lines);
+
+        lines.push_back(gen_impl(lib, &rs_type_name, msg_type).into());
+    }
 }
 
 fn read_file(path: &Path) -> Result<String, DynError> {
@@ -271,117 +464,6 @@ fn mangle(var_name: &str) -> Cow<'_, str> {
         | "u32" | "i64" | "u64" | "bool" | "char" => format!("{var_name}_").into(),
         _ => var_name.into(),
     }
-}
-
-fn gen_member(type_name: &TypeName, var_name: &str) -> String {
-    match type_name {
-        TypeName::Type {
-            type_name,
-            array_info,
-        } => match array_info {
-            ArrayInfo::NotArray => {
-                format!("    {var_name}: {};", gen_type(type_name.as_str()))
-            }
-            ArrayInfo::Dynamic => {
-                let type_name = gen_seq_type(&type_name, 0);
-                format!("    {var_name}: {type_name};")
-            }
-            ArrayInfo::Limited(size) => {
-                let type_name = gen_seq_type(&type_name, *size);
-                format!("    {var_name}: {type_name};")
-            }
-            ArrayInfo::Static(size) => {
-                format!("    {var_name}: [{type_name}; {size}];")
-            }
-        },
-        TypeName::ScopedType {
-            scope,
-            type_name,
-            array_info,
-        } => match array_info {
-            // TODO: add this to dependencies
-            ArrayInfo::NotArray => {
-                format!("    {var_name}: {scope}::msg::{type_name};")
-            }
-            ArrayInfo::Dynamic => {
-                let type_name = gen_seq_type(&type_name, 0);
-                format!("    {var_name}: {scope}::msg::{type_name};")
-            }
-            ArrayInfo::Limited(size) => {
-                let type_name = gen_seq_type(&type_name, *size);
-                format!("    {var_name}: {scope}::msg::{type_name};")
-            }
-            ArrayInfo::Static(size) => {
-                format!("    {var_name}: [{scope}::msg::{type_name}; {size}];")
-            }
-        },
-        TypeName::LimitedString {
-            size: str_len,
-            array_info,
-        } => match array_info {
-            ArrayInfo::NotArray => {
-                format!("    {var_name}: safe_drive::msg::RosString<{str_len}>;")
-            }
-            ArrayInfo::Dynamic => {
-                format!("    {var_name}: safe_drive::msg::RosStringSeq<{str_len}, 0>;")
-            }
-            ArrayInfo::Limited(size) => {
-                format!("    {var_name}: safe_drive::msg::RosStringSeq<{str_len}, {size}>;")
-            }
-            ArrayInfo::Static(size) => {
-                format!("    {var_name}: [safe_drive::msg::RosString<{str_len}>; {size}];")
-            }
-        },
-        TypeName::String(array_info) => match array_info {
-            ArrayInfo::NotArray => {
-                format!("    {var_name}: safe_drive::msg::RosString<0>;")
-            }
-            ArrayInfo::Dynamic => {
-                format!("    {var_name}: safe_drive::msg::RosStringSeq<0, 0>;")
-            }
-            ArrayInfo::Limited(size) => {
-                format!("    {var_name}: safe_drive::msg::RosStringSeq<0, {size}>;")
-            }
-            ArrayInfo::Static(size) => {
-                format!("    {var_name}: [safe_drive::msg::RosString<0>; {size}];")
-            }
-        },
-    }
-}
-
-fn gen_struct(exprs: &[Expr], struct_name: &str, lines: &mut VecDeque<Cow<'static, str>>) {
-    lines.push_back("#[repr(C)]".into());
-    lines.push_back("#[derive(Debug)]".into());
-    lines.push_back(format!("pub struct {struct_name} {{").into());
-
-    let mut num_member = 0;
-
-    for expr in exprs.iter() {
-        match expr {
-            Expr::Variable {
-                type_name,
-                var_name,
-                value: Some(ValueType::Const(const_value)),
-                comment: _,
-            } => todo!(),
-            Expr::Variable {
-                type_name,
-                var_name,
-                ..
-            } => {
-                let line = gen_member(type_name, var_name);
-                lines.push_back(line.into());
-                num_member += 1;
-            }
-            _ => (),
-        };
-    }
-
-    if num_member == 0 {
-        lines.push_back("    _structure_needs_at_least_one_member: u8;".into());
-    }
-
-    lines.push_back("}".into());
 }
 
 fn gen_seq_type(type_str: &str, size: usize) -> String {
@@ -446,6 +528,7 @@ impl {type_name_full} {{
     pub fn new() -> Self {{
         let mut msg: Self = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
         unsafe {{ {module_name}__{mid}__{type_name}{c_func_mid}__init(&mut msg) }};
+        msg
     }}
 }}
 
@@ -545,7 +628,8 @@ unsafe impl<const N: usize> Sync for {type_name_full}Seq<N> {{}}
 
 fn gen_c_extern_msg(module_name: &str, type_name: &str) -> String {
     format!(
-        "extern \"C\" {{
+        "
+extern \"C\" {{
     fn {module_name}__msg__{type_name}__init(msg: *mut {type_name}) -> bool;
     fn {module_name}__msg__{type_name}__fini(msg: *mut {type_name});
     fn {module_name}__msg__{type_name}__are_equal(lhs: *const {type_name}, rhs: *const {type_name}) -> bool;

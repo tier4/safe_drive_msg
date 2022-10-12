@@ -3,11 +3,15 @@
 pub(crate) mod generator;
 pub(crate) mod parser;
 
-use std::{collections::BTreeSet, error::Error};
+use std::{
+    collections::BTreeSet,
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 pub type DynError = Box<dyn Error + Send + Sync + 'static>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum SafeDrive<'a> {
     Path(&'a str),
     Version(&'a str),
@@ -20,6 +24,20 @@ pub fn depends(outdir: &str, libs: &[&str], safe_drive: SafeDrive) -> Result<(),
         .map(|p| std::path::Path::new(p).join("share"))
         .collect();
 
+    let libs: BTreeSet<_> = libs.iter().map(|e| e.to_string()).collect();
+
+    let outdir = std::path::Path::new(outdir);
+    std::fs::create_dir_all(outdir)?;
+
+    generate_libs(outdir, &ament_paths, &libs, safe_drive)
+}
+
+fn generate_libs(
+    outdir: &Path,
+    ament_paths: &Vec<PathBuf>,
+    libs: &BTreeSet<String>,
+    safe_drive: SafeDrive,
+) -> Result<(), DynError> {
     let libs: BTreeSet<_> = libs.iter().collect();
 
     let outdir = std::path::Path::new(outdir);
@@ -36,8 +54,12 @@ pub fn depends(outdir: &str, libs: &[&str], safe_drive: SafeDrive) -> Result<(),
             if resource.exists() {
                 let path = path.join(lib);
                 if path.exists() {
-                    let mut gen = generator::Generator::new(safe_drive.clone());
+                    let mut gen = generator::Generator::new(safe_drive);
                     gen.generate(outdir, &path, lib)?;
+
+                    // Generate dependencies.
+                    generate_libs(outdir, ament_paths, &gen.dependencies, safe_drive)?;
+
                     continue 'lib;
                 } else {
                     eprintln!(
@@ -61,7 +83,7 @@ mod tests {
         depends(
             "/tmp/safe_drive_msg",
             &["std_msgs"],
-            SafeDrive::Version("0.1"),
+            SafeDrive::Path("/home/yuukitakano/program/safe_drive"),
         )
         .unwrap();
     }
@@ -71,7 +93,7 @@ mod tests {
         depends(
             "/tmp/safe_drive_msg",
             &["std_srvs"],
-            SafeDrive::Version("0.1"),
+            SafeDrive::Path("/home/yuukitakano/program/safe_drive"),
         )
         .unwrap();
     }
