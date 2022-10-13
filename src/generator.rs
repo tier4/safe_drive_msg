@@ -20,6 +20,8 @@ pub struct Generator<'a> {
     safe_drive: SafeDrive<'a>,
 }
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 impl<'a> Generator<'a> {
     pub fn new(safe_drive: SafeDrive<'a>) -> Self {
         Self {
@@ -34,11 +36,13 @@ impl<'a> Generator<'a> {
         // Read checksum.
         let cksum = checksumdir::checksumdir(path.to_str().unwrap())?;
         let cksum_file = out_dir.join(lib).join("cksum");
+        let cksum_msg = format!("{VERSION}\n{:?}\n{cksum}", self.safe_drive);
+
         if let Ok(mut f) = File::open(&cksum_file) {
             let mut buf = String::new();
             f.read_to_string(&mut buf)?;
 
-            if buf == cksum {
+            if buf == cksum_msg {
                 return Ok(()); // already generated and it is the latest
             }
         }
@@ -48,7 +52,7 @@ impl<'a> Generator<'a> {
 
         // Write checksum.
         if let Ok(mut f) = File::create(cksum_file) {
-            let _ = f.write(cksum.as_bytes());
+            let _ = f.write(cksum_msg.as_bytes());
         }
 
         Ok(())
