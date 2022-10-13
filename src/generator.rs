@@ -285,7 +285,7 @@ safe_drive = {safe_drive_dep}
         Ok(())
     }
 
-    fn generate_var(&mut self, type_name: &TypeName, var_name: &str) -> String {
+    fn generate_var(&mut self, type_name: &TypeName, var_name: &str, lib: &str) -> String {
         match type_name {
             TypeName::Type {
                 type_name,
@@ -313,6 +313,8 @@ safe_drive = {safe_drive_dep}
                 array_info,
             } => {
                 self.dependencies.insert(scope.clone());
+
+                let scope = if scope == lib { "crate" } else { scope };
 
                 match array_info {
                     ArrayInfo::NotArray => {
@@ -369,6 +371,7 @@ safe_drive = {safe_drive_dep}
         &mut self,
         exprs: &[Expr],
         struct_name: &str,
+        lib: &str,
         lines: &mut VecDeque<Cow<'static, str>>,
     ) {
         lines.push_back("#[repr(C)]".into());
@@ -385,7 +388,7 @@ safe_drive = {safe_drive_dep}
                     value: Some(ValueType::Const(const_value)),
                     comment: _,
                 } => {
-                    let var = self.generate_var(type_name, var_name);
+                    let var = self.generate_var(type_name, var_name, lib);
                     lines.push_front(format!("pub const {var} = {const_value};").into());
                 }
                 Expr::Variable {
@@ -393,7 +396,7 @@ safe_drive = {safe_drive_dep}
                     var_name,
                     ..
                 } => {
-                    let var = self.generate_var(type_name, var_name);
+                    let var = self.generate_var(type_name, var_name, lib);
                     lines.push_back(format!("    pub {var},").into());
                     num_member += 1;
                 }
@@ -422,7 +425,7 @@ safe_drive = {safe_drive_dep}
             MsgType::SrvResponse => format!("{rs_type_name}Response"),
         };
 
-        self.generate_struct(exprs, &struct_name, lines);
+        self.generate_struct(exprs, &struct_name, lib, lines);
 
         lines.push_back(gen_impl(lib, &rs_type_name, msg_type).into());
     }
