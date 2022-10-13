@@ -312,9 +312,12 @@ safe_drive = {safe_drive_dep}
                 type_name,
                 array_info,
             } => {
-                self.dependencies.insert(scope.clone());
-
-                let scope = if scope == lib { "crate" } else { scope };
+                let scope = if scope == lib {
+                    "crate"
+                } else {
+                    self.dependencies.insert(scope.clone());
+                    scope
+                };
 
                 match array_info {
                     ArrayInfo::NotArray => {
