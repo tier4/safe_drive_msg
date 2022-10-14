@@ -9,3 +9,4 @@ edition = "2021"
 nom = "7"
 convert_case = "0.6"
 checksumdir = "0.3"
+t4_idl_parser = { path = "../idl_parser" }

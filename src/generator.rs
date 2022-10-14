@@ -1,4 +1,5 @@
 use crate::{
+    idl_preprocess::preprocess,
     parser::{self, ArrayInfo, Expr, TypeName, ValueType},
     DynError, SafeDrive,
 };
@@ -11,6 +12,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
+use t4_idl_parser::expr::{ConstrTypeDcl, Definition, Module, StructDcl, TypeDcl};
 
 #[derive(Debug, Clone)]
 pub struct Generator<'a> {
@@ -177,12 +179,79 @@ safe_drive = {safe_drive_dep}
                     match ext.to_str() {
                         Some("msg") => self.generate_msg(out_dir, path, lib)?,
                         Some("srv") => self.generate_srv(out_dir, path, lib)?,
+                        Some("idl") => self.generate_idl(out_dir, path, lib)?,
                         _ => (),
                     }
                 }
             } else if metadata.is_symlink() {
                 let path = std::fs::read_link(path)?;
                 self.generate_recursive(out_dir, &path, lib)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn generate_idl(&mut self, out_lib_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
+        // Read.
+        let contents = read_file(path)?;
+
+        // Preprocess.
+        let contents = preprocess(&contents);
+
+        // Parse.
+        let exprs = t4_idl_parser::parse(&contents)?;
+
+        for expr in exprs {
+            match expr.definition {
+                Definition::Module(module) => {
+                    self.generate_idl_module_1st(module, out_lib_dir, path, lib)?
+                }
+                _ => (),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn generate_idl_module_1st(
+        &mut self,
+        module: Module,
+        out_lib_dir: &Path,
+        path: &Path,
+        lib: &str,
+    ) -> Result<(), DynError> {
+        if module.id != lib {
+            return Ok(());
+        }
+
+        for expr in module.definitions {
+            if let Definition::Module(module_2nd) = expr.definition {
+                self.generate_idl_module_2nd(module_2nd, out_lib_dir, path, lib)?
+            }
+        }
+
+        Ok(())
+    }
+
+    fn generate_idl_module_2nd(
+        &mut self,
+        module: Module,
+        out_lib_dir: &Path,
+        path: &Path,
+        lib: &str,
+    ) -> Result<(), DynError> {
+        for expr in module.definitions {
+            match expr.definition {
+                Definition::Type(TypeDcl::ConstrType(ConstrTypeDcl::Struct(StructDcl::Def(s)))) => {
+                    if module.id == "msg" {
+                        println!("msg: struct {}", s.id);
+                    } else if module.id == "srv" {
+                        println!("srv: struct {}", s.id);
+                    }
+                }
+                Definition::Module(module_3rd) => {}
+                _ => (),
             }
         }
 
