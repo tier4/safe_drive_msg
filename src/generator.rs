@@ -12,7 +12,10 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
 };
-use t4_idl_parser::expr::{ConstrTypeDcl, Definition, Module, StructDcl, TypeDcl};
+use t4_idl_parser::expr::{
+    AnyDeclarator, ConstrTypeDcl, Definition, Module, PortTypeDef, PrimitiveType, ScopedName,
+    StructDcl, TypeDcl, TypeSpec, Typedef, TypedefType,
+};
 
 #[derive(Debug, Clone)]
 pub struct Generator<'a> {
@@ -251,11 +254,62 @@ safe_drive = {safe_drive_dep}
                     }
                 }
                 Definition::Module(module_3rd) => {}
+                Definition::Type(TypeDcl::Typedef(typedef)) => {
+                    println!("typedef: {:?}", typedef);
+                    let lines = self.idl_typedef(typedef, lib);
+                }
                 _ => (),
             }
         }
 
         Ok(())
+    }
+
+    fn idl_typedef(&mut self, typedef: Typedef, lib: &str) -> Vec<String> {
+        let type_str = match typedef.type_dcl {
+            TypedefType::Simple(t) => match t {
+                TypeSpec::PrimitiveType(prim_type) => idl_primitive(&prim_type).to_string(),
+                TypeSpec::ScopedName(name) => self.idl_scoped_name(&name, lib),
+                TypeSpec::Template(template_type) => todo!(),
+            },
+            TypedefType::Constr(t) => todo!(),
+            TypedefType::Template(t) => todo!(),
+        };
+
+        let mut result = Vec::new();
+
+        for dcls in typedef.declarators.iter() {
+            match dcls {
+                AnyDeclarator::Simple(id) => {
+                    result.push(format!("type {id} = {type_str};"));
+                }
+                AnyDeclarator::Array(adcl) => {
+                    todo!()
+                }
+            }
+        }
+
+        result
+    }
+
+    fn idl_scoped_name(&mut self, name: &ScopedName, lib: &str) -> String {
+        match name {
+            ScopedName::Absolute(v) => {
+                assert!(!v.is_empty());
+
+                if v.len() == 1 {
+                    v[0].clone()
+                } else {
+                    if v[0] == lib {
+                        format!("crate::{}", v[1..].join("::"))
+                    } else {
+                        self.dependencies.insert(v[0].clone());
+                        v.join("::")
+                    }
+                }
+            }
+            ScopedName::Relative(v) => v.join("::"),
+        }
     }
 
     fn generate_msg(&mut self, out_lib_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
@@ -831,4 +885,22 @@ extern \"C\" {{
 }}
 "
     )
+}
+
+fn idl_primitive(prim_type: &PrimitiveType) -> &str {
+    match prim_type {
+        PrimitiveType::Boolean => "bool",
+        PrimitiveType::Char | PrimitiveType::Int8 => "i8",
+        PrimitiveType::Int16 | PrimitiveType::Short => "i16",
+        PrimitiveType::Int32 | PrimitiveType::Long => "i32",
+        PrimitiveType::Int64 | PrimitiveType::LongLong => "i64",
+        PrimitiveType::Uint8 | PrimitiveType::Octet => "u8",
+        PrimitiveType::Uint16 | PrimitiveType::UnsignedShort | PrimitiveType::WChar => "u16",
+        PrimitiveType::Uint32 | PrimitiveType::UnsignedLong => "u32",
+        PrimitiveType::Uint64 | PrimitiveType::UnsignedLongLong => "u64",
+        PrimitiveType::Float => "f32",
+        PrimitiveType::Double => "f64",
+        PrimitiveType::LongDouble => "f128",
+        PrimitiveType::Any => unimplemented!(),
+    }
 }
