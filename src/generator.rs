@@ -1,10 +1,15 @@
 use crate::{
-    idl_preprocess::preprocess,
+    idl::{
+        const_expr::{eval, ConstValue},
+        preprocessor::preprocess,
+    },
     parser::{self, ArrayInfo, Expr, TypeName, ValueType},
     DynError, SafeDrive,
 };
 use convert_case::{Case, Casing};
 use nom::{error::convert_error, Finish};
+use num_bigint::BigInt;
+use num_traits::Zero;
 use std::{
     borrow::Cow,
     collections::{BTreeSet, VecDeque},
@@ -13,8 +18,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use t4_idl_parser::expr::{
-    AnyDeclarator, ConstrTypeDcl, Definition, Module, PortTypeDef, PrimitiveType, ScopedName,
-    StructDcl, TypeDcl, TypeSpec, Typedef, TypedefType,
+    AnyDeclarator, ArrayDeclarator, ConstrTypeDcl, Definition, Member, Module, PrimitiveType,
+    ScopedName, StructDcl, StructDef, TypeDcl, TypeSpec, Typedef, TypedefType,
 };
 
 #[derive(Debug, Clone)]
@@ -265,6 +270,28 @@ safe_drive = {safe_drive_dep}
         Ok(())
     }
 
+    fn idl_struct(&mut self, lines: &mut Vec<String>, struct_def: &StructDef) {
+        lines.push(format!("#[derive(Debug)]"));
+        lines.push(format!("pub struct {} {{", struct_def.id));
+        for member in struct_def.members.iter() {
+            todo!();
+        }
+        lines.push(format!("}}"));
+    }
+
+    fn idl_member(&mut self, lines: &mut Vec<String>, member: &Member) {
+        for declarator in member.declarators.iter() {
+            match declarator {
+                AnyDeclarator::Simple(dcl) => todo!(),
+                AnyDeclarator::Array(dcl) => {
+                    let size = idl_array_size(dcl);
+
+                    todo!()
+                }
+            }
+        }
+    }
+
     fn idl_typedef(&mut self, typedef: Typedef, lib: &str) -> Vec<String> {
         let type_str = match typedef.type_dcl {
             TypedefType::Simple(t) => match t {
@@ -283,11 +310,14 @@ safe_drive = {safe_drive_dep}
                 AnyDeclarator::Simple(id) => {
                     result.push(format!("type {id} = {type_str};"));
                 }
-                AnyDeclarator::Array(adcl) => {
-                    todo!()
+                AnyDeclarator::Array(dcl) => {
+                    let size = idl_array_size(&dcl);
+                    result.push(format!("pub type {} = [{type_str}; {size}]", dcl.id));
                 }
             }
         }
+
+        println!("{:?}", result);
 
         result
     }
@@ -566,6 +596,16 @@ fn read_file(path: &Path) -> Result<String, DynError> {
         c
     };
     Ok(contents)
+}
+
+fn idl_array_size(dcl: &ArrayDeclarator) -> BigInt {
+    dcl.array_size.iter().fold(BigInt::zero(), |val, e| {
+        if let ConstValue::Integer(n) = eval(&e) {
+            val + n
+        } else {
+            panic!("not a integer number")
+        }
+    })
 }
 
 fn module_file_type(path: &Path) -> Result<(String, PathBuf, String), DynError> {
@@ -902,5 +942,148 @@ fn idl_primitive(prim_type: &PrimitiveType) -> &str {
         PrimitiveType::Double => "f64",
         PrimitiveType::LongDouble => "f128",
         PrimitiveType::Any => unimplemented!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_idl() {
+        let input = r#"
+module example_msg {
+    module msg {
+        typedef int32 int32__10[10];
+        module StdMsg_Constants {
+            @verbatim (language="comment", text=
+                "constant")
+            const int32 XX = 20;
+            const string INITIALIZING_VEHICLE = "InitializingVehicle a\"a";
+            const string WAITING_FOR_ROUTE = "WaitingForRoute";
+            const string PLANNING = "Planning";
+        };
+
+        @verbatim (language="comment", text="http://wiki.ros.org/msg")
+        struct StdMsg {
+            boolean a;
+
+            int8 b;
+
+            uint8 c;
+
+            int16 d;
+
+            uint16 e;
+
+            int32 f;
+
+            uint32 g;
+
+            int64 h;
+
+            uint64 i;
+
+            float j;
+
+            double k;
+
+            string l;
+
+            @verbatim (language="comment", text=
+                "time m" "\n"
+                "duration n" "\n"
+                "array")
+            sequence<int32> o;
+
+            int32__10 p;
+
+            sequence<int32, 5> limited;
+
+            @verbatim (language="comment", text=
+                "http://wiki.ros.org/std_msgs")
+            std_msgs::msg::Bool q;
+
+            std_msgs::msg::Byte r;
+
+            std_msgs::msg::ByteMultiArray s;
+
+            std_msgs::msg::Char t;
+
+            std_msgs::msg::ColorRGBA u;
+
+            @verbatim (language="comment", text=
+                "std_msgs/Duration v")
+            std_msgs::msg::Empty w;
+
+            std_msgs::msg::Float32 x;
+
+            std_msgs::msg::Float32MultiArray y;
+
+            std_msgs::msg::Float64 z;
+
+            std_msgs::msg::Float64MultiArray aa;
+
+            std_msgs::msg::Header bb;
+
+            std_msgs::msg::Int16 cc;
+
+            std_msgs::msg::Int16MultiArray dd;
+
+            std_msgs::msg::Int32 ee;
+
+            std_msgs::msg::Int32MultiArray ff;
+
+            std_msgs::msg::Int64 gg;
+
+            std_msgs::msg::Int64MultiArray hh;
+
+            std_msgs::msg::Int8 ii;
+
+            std_msgs::msg::Int8MultiArray jj;
+
+            std_msgs::msg::MultiArrayDimension kk;
+
+            std_msgs::msg::MultiArrayLayout ll;
+
+            std_msgs::msg::String mm;
+
+            @verbatim (language="comment", text=
+                "std_msgs/Time nn")
+            std_msgs::msg::UInt16 oo;
+
+            std_msgs::msg::UInt16MultiArray pp;
+
+            std_msgs::msg::UInt32 qq;
+
+            std_msgs::msg::UInt32MultiArray rr;
+
+            std_msgs::msg::UInt64 ss;
+
+            std_msgs::msg::UInt64MultiArray tt;
+
+            std_msgs::msg::UInt8 uu;
+
+            std_msgs::msg::UInt8MultiArray vv;
+
+            @verbatim (language="comment", text=
+                "default")
+            @default (value=40)
+            int32 ww;
+        };
+    };
+};"#;
+
+        let idl_path = Path::new("/tmp/example_msg.idl");
+        {
+            let mut f = File::create(idl_path).unwrap();
+            f.write_all(input.as_bytes()).unwrap();
+        }
+
+        let mut g = Generator::new(SafeDrive::Version("0.1"));
+        g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
+            .unwrap();
+
+        // Parse.
     }
 }

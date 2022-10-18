@@ -1,8 +1,7 @@
 //! https://github.com/ament/ament_cmake/blob/master/ament_cmake_core/doc/resource_index.md
 
 pub(crate) mod generator;
-pub(crate) mod idl_evaluator;
-pub(crate) mod idl_preprocess;
+pub(crate) mod idl;
 pub(crate) mod parser;
 
 use std::{
