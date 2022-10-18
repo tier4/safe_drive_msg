@@ -83,7 +83,7 @@ mod tests {
         depends(
             Path::new("/tmp/safe_drive_msg"),
             &["std_msgs"],
-            SafeDrive::Path("/home/yuukitakano/program/safe_drive"),
+            SafeDrive::Version("0.1"),
         )
         .unwrap();
     }
@@ -93,7 +93,7 @@ mod tests {
         depends(
             Path::new("/tmp/safe_drive_msg"),
             &["std_srvs"],
-            SafeDrive::Path("/home/yuukitakano/program/safe_drive"),
+            SafeDrive::Version("0.1"),
         )
         .unwrap();
     }
