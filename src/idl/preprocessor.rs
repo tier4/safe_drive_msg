@@ -1,5 +1,3 @@
-use std::result;
-
 /// Currently, just skip macros.
 pub fn preprocess(input: &str) -> String {
     let mut result = String::new();

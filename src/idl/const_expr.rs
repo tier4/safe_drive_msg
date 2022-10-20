@@ -37,7 +37,7 @@ pub fn eval(expr: &ConstExpr) -> ConstValue {
             arithmetic_op(left, right, &|n1, n2| n1 % n2, &|n1, n2| n1 % n2)
         }
         ConstExpr::UnaryOp(e) => eval_unary_op(e),
-        ConstExpr::ScopedName(n) => todo!(),
+        ConstExpr::ScopedName(_n) => todo!(),
     }
 }
 

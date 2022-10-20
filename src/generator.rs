@@ -15,7 +15,6 @@ use std::{
     collections::{BTreeSet, VecDeque},
     fs::File,
     io::{Read, Write},
-    ops::Add,
     path::{Path, PathBuf},
 };
 use t4_idl_parser::expr::{
@@ -32,6 +31,13 @@ pub struct Generator<'a> {
     safe_drive: SafeDrive<'a>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IDLType {
+    Msg(String),
+    Srv(String),
+    NoType,
+}
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 impl<'a> Generator<'a> {
@@ -44,9 +50,9 @@ impl<'a> Generator<'a> {
         }
     }
 
-    pub fn generate(&mut self, out_dir: &Path, path: &Path, lib: &str) -> Result<(), DynError> {
+    pub fn generate(&mut self, out_dir: &Path, in_dir: &Path, lib: &str) -> Result<(), DynError> {
         // Read checksum.
-        let cksum = checksumdir::checksumdir(path.to_str().unwrap())?;
+        let cksum = checksumdir::checksumdir(in_dir.to_str().unwrap())?;
         let cksum_file = out_dir.join(lib).join("cksum");
         let cksum_msg = format!("{VERSION}\n{:?}\n{cksum}", self.safe_drive);
 
@@ -59,7 +65,7 @@ impl<'a> Generator<'a> {
             }
         }
 
-        self.generate_recursive(out_dir, path, lib)?;
+        self.generate_recursive(out_dir, in_dir, lib)?;
         self.generate_crate(out_dir, lib)?;
 
         // Write checksum.
@@ -189,7 +195,21 @@ safe_drive = {safe_drive_dep}
                     match ext.to_str() {
                         Some("msg") => self.generate_msg(out_dir, path, lib)?,
                         Some("srv") => self.generate_srv(out_dir, path, lib)?,
-                        Some("idl") => self.generate_idl(out_dir, path, lib)?,
+                        Some("idl") => {
+                            if let Some(stem) = path.file_stem() {
+                                let msg_file = format!("{}.msg", stem.to_str().unwrap());
+                                let srv_file = format!("{}.srv", stem.to_str().unwrap());
+
+                                let msg_file = Path::new(&msg_file);
+                                let srv_file = Path::new(&srv_file);
+
+                                if msg_file.exists() || srv_file.exists() {
+                                    return Ok(());
+                                }
+                            }
+
+                            self.generate_idl(out_dir, path, lib)?
+                        }
                         _ => (),
                     }
                 }
@@ -212,19 +232,63 @@ safe_drive = {safe_drive_dep}
         // Parse.
         let exprs = t4_idl_parser::parse(&contents)?;
 
-        let mut lines = Vec::new();
+        let mut lines = VecDeque::new();
+
+        let mut idl_type = IDLType::NoType;
 
         for expr in exprs {
             match expr.definition {
                 Definition::Module(module) => {
-                    self.generate_idl_module_1st(&mut lines, module, lib)?
+                    idl_type = self.generate_idl_module_1st(&mut lines, module, lib)?;
+                    break;
                 }
                 _ => (),
             }
         }
 
-        for line in lines {
+        let rs_type_name = match &idl_type {
+            IDLType::Msg(t) => t,
+            IDLType::Srv(t) => t,
+            IDLType::NoType => return Ok(()),
+        };
+
+        let snake_type_name = &rs_type_name.to_case(Case::Snake);
+        let rs_module = mangle(&snake_type_name);
+        let rs_file = format!("{rs_module}.rs");
+
+        let out_file = match idl_type {
+            IDLType::Msg(_) => {
+                self.msgs.insert(rs_module.into());
+
+                // Create directories.
+                let out_dir = out_lib_dir.join(lib).join("src").join("msg");
+                std::fs::create_dir_all(&out_dir)?;
+
+                // Path to the file.
+                out_dir.join(&rs_file)
+            }
+            IDLType::Srv(_) => {
+                self.srvs.insert(rs_module.into());
+
+                // Create directories.
+                let out_dir = out_lib_dir.join(lib).join("src").join("srv");
+                std::fs::create_dir_all(&out_dir)?;
+
+                // Path to the file.
+                out_dir.join(&rs_file)
+            }
+            IDLType::NoType => return Ok(()),
+        };
+
+        // Print.
+        for line in lines.iter() {
             println!("{line}");
+        }
+
+        // Write.
+        let mut f = File::create(out_file)?;
+        for line in lines {
+            f.write_fmt(format_args!("{}\n", line))?;
         }
 
         Ok(())
@@ -232,29 +296,33 @@ safe_drive = {safe_drive_dep}
 
     fn generate_idl_module_1st(
         &mut self,
-        lines: &mut Vec<String>,
+        lines: &mut VecDeque<String>,
         module: Module,
         lib: &str,
-    ) -> Result<(), DynError> {
+    ) -> Result<IDLType, DynError> {
+        let mut result = IDLType::NoType;
+
         if module.id != lib {
-            return Ok(());
+            return Ok(IDLType::NoType);
         }
 
         for expr in module.definitions {
             if let Definition::Module(module_2nd) = expr.definition {
-                self.generate_idl_module_2nd(lines, module_2nd, lib)?
+                result = self.generate_idl_module_2nd(lines, module_2nd, lib)?;
             }
         }
 
-        Ok(())
+        Ok(result)
     }
 
     fn generate_idl_module_2nd(
         &mut self,
-        lines: &mut Vec<String>,
+        lines: &mut VecDeque<String>,
         module: Module,
         lib: &str,
-    ) -> Result<(), DynError> {
+    ) -> Result<IDLType, DynError> {
+        let mut result = IDLType::NoType;
+
         for expr in module.definitions {
             match expr.definition {
                 Definition::Type(TypeDcl::ConstrType(ConstrTypeDcl::Struct(StructDcl::Def(
@@ -262,11 +330,16 @@ safe_drive = {safe_drive_dep}
                 )))) => {
                     if module.id == "msg" {
                         println!("msg: struct {}", struct_def.id);
-                        lines.push(gen_c_extern_msg(lib, &struct_def.id));
+                        lines.push_back(gen_c_extern_msg(lib, &struct_def.id));
 
                         self.idl_struct(lines, &struct_def, lib);
 
-                        lines.push(gen_impl_for_msg(lib, &struct_def.id));
+                        lines.push_back(gen_impl(lib, &struct_def.id, MsgType::Msg));
+                        lines.push_back(gen_impl_for_msg(lib, &struct_def.id));
+                        lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
+
+                        assert_eq!(result, IDLType::NoType);
+                        result = IDLType::Msg(struct_def.id);
                     } else if module.id == "srv" {
                         println!("srv: struct {}", struct_def.id);
                         todo!()
@@ -274,7 +347,6 @@ safe_drive = {safe_drive_dep}
                 }
                 Definition::Module(module_3rd) => (),
                 Definition::Type(TypeDcl::Typedef(typedef)) => {
-                    println!("typedef: {:?}", typedef);
                     let mut typedefs = self.idl_typedef(typedef, lib);
                     lines.append(&mut typedefs);
                 }
@@ -282,30 +354,30 @@ safe_drive = {safe_drive_dep}
             }
         }
 
-        Ok(())
+        Ok(result)
     }
 
-    fn idl_struct(&mut self, lines: &mut Vec<String>, struct_def: &StructDef, lib: &str) {
-        lines.push(format!("#[repr(C)]"));
-        lines.push(format!("#[derive(Debug)]"));
-        lines.push(format!("pub struct {} {{", struct_def.id));
+    fn idl_struct(&mut self, lines: &mut VecDeque<String>, struct_def: &StructDef, lib: &str) {
+        lines.push_back(format!("#[repr(C)]"));
+        lines.push_back(format!("#[derive(Debug)]"));
+        lines.push_back(format!("pub struct {} {{", struct_def.id));
         for member in struct_def.members.iter() {
             self.idl_member(lines, member, lib);
         }
-        lines.push(format!("}}\n"));
+        lines.push_back(format!("}}"));
     }
 
-    fn idl_member(&mut self, lines: &mut Vec<String>, member: &Member, lib: &str) {
+    fn idl_member(&mut self, lines: &mut VecDeque<String>, member: &Member, lib: &str) {
         let type_str = self.idl_type_spec(&member.type_spec, lib);
 
         for declarator in member.declarators.iter() {
             match declarator {
                 AnyDeclarator::Simple(id) => {
-                    lines.push(format!("    pub {id}: {type_str},"));
+                    lines.push_back(format!("    pub {id}: {type_str},"));
                 }
                 AnyDeclarator::Array(dcl) => {
                     let size = idl_array_size(dcl);
-                    lines.push(format!("    pub {}: [{type_str}; {size}],", dcl.id));
+                    lines.push_back(format!("    pub {}: [{type_str}; {size}],", dcl.id));
                 }
             }
         }
@@ -322,6 +394,21 @@ safe_drive = {safe_drive_dep}
     fn idl_template_type(&mut self, type_spec: &TemplateTypeSpec, lib: &str) -> String {
         match type_spec {
             TemplateTypeSpec::String(val) => idl_string_type(val),
+            TemplateTypeSpec::Sequence(val) => self.idl_sequence_type(val, lib),
+            TemplateTypeSpec::FixedPoint(_) => unimplemented!(),
+            TemplateTypeSpec::Map(_) => unimplemented!(),
+            TemplateTypeSpec::WString(_) => unimplemented!(),
+        }
+    }
+
+    fn idl_template_type_seq(
+        &mut self,
+        type_spec: &TemplateTypeSpec,
+        size: &BigInt,
+        lib: &str,
+    ) -> String {
+        match type_spec {
+            TemplateTypeSpec::String(val) => idl_string_type_seq(val, size),
             TemplateTypeSpec::Sequence(val) => self.idl_sequence_type(val, lib),
             TemplateTypeSpec::FixedPoint(_) => unimplemented!(),
             TemplateTypeSpec::Map(_) => unimplemented!(),
@@ -390,28 +477,31 @@ safe_drive = {safe_drive_dep}
             TypeSpec::PrimitiveType(PrimitiveType::LongDouble) => unimplemented!(),
             TypeSpec::PrimitiveType(PrimitiveType::WChar) => unimplemented!(),
             TypeSpec::PrimitiveType(PrimitiveType::Any) => unimplemented!(),
-            TypeSpec::ScopedName(name) => todo!(),
-            TypeSpec::Template(tmpl) => todo!(),
+            TypeSpec::ScopedName(name) => {
+                let type_str = self.idl_scoped_name(name, lib);
+                format!("{type_str}Seq<{size}>")
+            }
+            TypeSpec::Template(tmpl) => self.idl_template_type_seq(tmpl, size, lib),
         }
     }
 
-    fn idl_typedef(&mut self, typedef: Typedef, lib: &str) -> Vec<String> {
+    fn idl_typedef(&mut self, typedef: Typedef, lib: &str) -> VecDeque<String> {
         let type_str = match typedef.type_dcl {
             TypedefType::Simple(t) => self.idl_type_spec(&t, lib),
-            TypedefType::Constr(t) => todo!(),
-            TypedefType::Template(t) => todo!(),
+            TypedefType::Constr(_) => unimplemented!(),
+            TypedefType::Template(t) => self.idl_template_type(&t, lib),
         };
 
-        let mut result = Vec::new();
+        let mut result = VecDeque::new();
 
         for dcls in typedef.declarators.iter() {
             match dcls {
                 AnyDeclarator::Simple(id) => {
-                    result.push(format!("type {id} = {type_str};"));
+                    result.push_back(format!("\npub type {id} = {type_str};"));
                 }
                 AnyDeclarator::Array(dcl) => {
                     let size = idl_array_size(&dcl);
-                    result.push(format!("pub type {} = [{type_str}; {size}];", dcl.id));
+                    result.push_back(format!("\npub type {} = [{type_str}; {size}];", dcl.id));
                 }
             }
         }
@@ -423,10 +513,8 @@ safe_drive = {safe_drive_dep}
 
     fn idl_scoped_name(&mut self, name: &ScopedName, lib: &str) -> String {
         fn mangle_vec(v: &[String]) -> String {
-            v[1..].iter().fold(String::new(), |result, s| {
-                let s = mangle(s);
-                result.add(&s)
-            })
+            let v: Vec<_> = v.iter().map(|s| mangle(s).to_string()).collect();
+            v.join("::")
         }
 
         match name {
@@ -732,6 +820,19 @@ fn idl_string_type(string_type: &StringType) -> String {
             }
         }
         StringType::UnlimitedSize => "safe_drive::msg::RosString<0>".to_string(),
+    }
+}
+
+fn idl_string_type_seq(string_type: &StringType, size: &BigInt) -> String {
+    match string_type {
+        StringType::Sized(expr) => {
+            if let ConstValue::Integer(n) = eval(expr) {
+                format!("safe_drive::msg::RosStringSeq<{n}, {size}>")
+            } else {
+                panic!("not a integer number")
+            }
+        }
+        StringType::UnlimitedSize => format!("safe_drive::msg::RosStringSeq<0, {size}>"),
     }
 }
 
@@ -1208,7 +1309,5 @@ module example_msg {
         let mut g = Generator::new(SafeDrive::Version("0.1"));
         g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
             .unwrap();
-
-        // Parse.
     }
 }
