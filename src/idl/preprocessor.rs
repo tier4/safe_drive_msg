@@ -4,7 +4,7 @@ pub fn preprocess(input: &str) -> String {
 
     for line in input.split('\n') {
         let line = line.trim();
-        if !line.starts_with("#") {
+        if !line.starts_with('#') {
             result.push_str(&format!("{line}\n"));
         }
     }

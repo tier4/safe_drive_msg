@@ -21,7 +21,7 @@ pub enum SafeDrive<'a> {
 pub fn depends(outdir: &Path, libs: &[&str], safe_drive: SafeDrive) -> Result<(), DynError> {
     let ament_paths = std::env::var("AMENT_PREFIX_PATH")?;
     let ament_paths: Vec<_> = ament_paths
-        .split(":")
+        .split(':')
         .map(|p| std::path::Path::new(p).join("share"))
         .collect();
 

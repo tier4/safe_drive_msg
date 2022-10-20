@@ -354,10 +354,12 @@ fn parse_identifier(input: &str) -> PResult<String> {
 /// ```
 fn parse_captal_identifier(input: &str) -> PResult<String> {
     // (_|[A..Z]+)
-    let (input, head) = satisfy(|c| 'A' <= c && c <= 'Z' || c == '_')(input)?;
+    let (input, head) = satisfy(|c| ('A'..='Z').contains(&c) || c == '_')(input)?;
 
     // ([A..Z0..9]|_)*
-    let (input, tail) = many0(satisfy(|c| 'A' <= c && c <= 'Z' || c == '_'))(input)?;
+    let (input, tail) = many0(satisfy(|c| {
+        ('A'..='Z').contains(&c) || ('0'..='9').contains(&c) || c == '_'
+    }))(input)?;
 
     let tail: String = tail.iter().collect();
     Ok((input, format!("{head}{tail}")))

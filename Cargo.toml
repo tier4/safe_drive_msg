@@ -12,4 +12,3 @@ checksumdir = "0.3"
 t4_idl_parser = { path = "../idl_parser" }
 num-bigint = "0.4"
 num-traits = "0.2"
-

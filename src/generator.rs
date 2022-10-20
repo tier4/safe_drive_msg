@@ -18,9 +18,9 @@ use std::{
     path::{Path, PathBuf},
 };
 use t4_idl_parser::expr::{
-    AnyDeclarator, ArrayDeclarator, ConstrTypeDcl, Definition, Member, Module, PrimitiveType,
-    ScopedName, SequenceType, StringType, StructDcl, StructDef, TemplateTypeSpec, TypeDcl,
-    TypeSpec, Typedef, TypedefType,
+    AnyDeclarator, ArrayDeclarator, ConstType, ConstrTypeDcl, Definition, Member, Module,
+    PrimitiveType, ScopedName, SequenceType, StringType, StructDcl, StructDef, TemplateTypeSpec,
+    TypeDcl, TypeSpec, Typedef, TypedefType,
 };
 
 #[derive(Debug, Clone)]
@@ -184,10 +184,8 @@ safe_drive = {safe_drive_dep}
         if let Ok(metadata) = path.metadata() {
             if metadata.is_dir() {
                 // directory
-                for file in std::fs::read_dir(path)? {
-                    if let Ok(file) = file {
-                        self.generate_recursive(out_dir, &file.path(), lib)?;
-                    }
+                for file in (std::fs::read_dir(path)?).flatten() {
+                    self.generate_recursive(out_dir, &file.path(), lib)?;
                 }
             } else if metadata.is_file() {
                 // file
@@ -237,12 +235,9 @@ safe_drive = {safe_drive_dep}
         let mut idl_type = IDLType::NoType;
 
         for expr in exprs {
-            match expr.definition {
-                Definition::Module(module) => {
-                    idl_type = self.generate_idl_module_1st(&mut lines, module, lib)?;
-                    break;
-                }
-                _ => (),
+            if let Definition::Module(module) = expr.definition {
+                idl_type = self.generate_idl_module_1st(&mut lines, module, lib)?;
+                break;
             }
         }
 
@@ -253,7 +248,7 @@ safe_drive = {safe_drive_dep}
         };
 
         let snake_type_name = &rs_type_name.to_case(Case::Snake);
-        let rs_module = mangle(&snake_type_name);
+        let rs_module = mangle(snake_type_name);
         let rs_file = format!("{rs_module}.rs");
 
         let out_file = match idl_type {
@@ -345,7 +340,9 @@ safe_drive = {safe_drive_dep}
                         todo!()
                     }
                 }
-                Definition::Module(module_3rd) => (),
+                Definition::Module(module_3rd) => {
+                    self.generate_idl_module_3rd(lines, module_3rd, lib)?
+                }
                 Definition::Type(TypeDcl::Typedef(typedef)) => {
                     let mut typedefs = self.idl_typedef(typedef, lib);
                     lines.append(&mut typedefs);
@@ -357,14 +354,43 @@ safe_drive = {safe_drive_dep}
         Ok(result)
     }
 
+    fn generate_idl_module_3rd(
+        &mut self,
+        lines: &mut VecDeque<String>,
+        module: Module,
+        lib: &str,
+    ) -> Result<(), DynError> {
+        lines.push_back(format!("\nmod {} {{", module.id));
+
+        for expr in module.definitions.iter() {
+            if let Definition::Const(const_expr) = &expr.definition {
+                let type_str = match &const_expr.const_type {
+                    ConstType::PrimitiveType(t) => idl_primitive(t).to_string(),
+                    ConstType::StringType(t) => idl_string_type(t),
+                    ConstType::ScopedName(t) => self.idl_scoped_name(t, lib),
+                    ConstType::WStringType(_) => unimplemented!(),
+                    ConstType::FixedPointConst => unimplemented!(),
+                };
+
+                let value = eval(&const_expr.expr);
+                let line = format!("    pub const {}: {type_str} = {value};", const_expr.id);
+                lines.push_back(line);
+            }
+        }
+
+        lines.push_back("}".to_string());
+
+        Ok(())
+    }
+
     fn idl_struct(&mut self, lines: &mut VecDeque<String>, struct_def: &StructDef, lib: &str) {
-        lines.push_back(format!("#[repr(C)]"));
-        lines.push_back(format!("#[derive(Debug)]"));
+        lines.push_back("#[repr(C)]".to_string());
+        lines.push_back("#[derive(Debug)]".to_string());
         lines.push_back(format!("pub struct {} {{", struct_def.id));
         for member in struct_def.members.iter() {
             self.idl_member(lines, member, lib);
         }
-        lines.push_back(format!("}}"));
+        lines.push_back("}".to_string());
     }
 
     fn idl_member(&mut self, lines: &mut VecDeque<String>, member: &Member, lib: &str) {
@@ -385,8 +411,8 @@ safe_drive = {safe_drive_dep}
 
     fn idl_type_spec(&mut self, type_spec: &TypeSpec, lib: &str) -> String {
         match type_spec {
-            TypeSpec::PrimitiveType(prim_type) => idl_primitive(&prim_type).to_string(),
-            TypeSpec::ScopedName(name) => self.idl_scoped_name(&name, lib),
+            TypeSpec::PrimitiveType(prim_type) => idl_primitive(prim_type).to_string(),
+            TypeSpec::ScopedName(name) => self.idl_scoped_name(name, lib),
             TypeSpec::Template(template_type) => self.idl_template_type(template_type, lib),
         }
     }
@@ -500,7 +526,7 @@ safe_drive = {safe_drive_dep}
                     result.push_back(format!("\npub type {id} = {type_str};"));
                 }
                 AnyDeclarator::Array(dcl) => {
-                    let size = idl_array_size(&dcl);
+                    let size = idl_array_size(dcl);
                     result.push_back(format!("\npub type {} = [{type_str}; {size}];", dcl.id));
                 }
             }
@@ -523,19 +549,17 @@ safe_drive = {safe_drive_dep}
 
                 if v.len() == 1 {
                     v[0].clone()
+                } else if v[0] == lib {
+                    let tail = mangle_vec(&v[1..]);
+                    format!("crate::{tail}")
                 } else {
-                    if v[0] == lib {
-                        let tail = mangle_vec(&v[1..]);
-                        format!("crate::{tail}")
-                    } else {
-                        let module_name = mangle(&v[0]);
-                        self.dependencies.insert(module_name.to_string());
-                        let tail = mangle_vec(&v[1..]);
-                        format!("{module_name}::{tail}")
-                    }
+                    let module_name = mangle(&v[0]);
+                    self.dependencies.insert(module_name.to_string());
+                    let tail = mangle_vec(&v[1..]);
+                    format!("{module_name}::{tail}")
                 }
             }
-            ScopedName::Relative(v) => mangle_vec(&v),
+            ScopedName::Relative(v) => mangle_vec(v),
         }
     }
 
@@ -554,7 +578,7 @@ safe_drive = {safe_drive_dep}
         };
 
         let (rs_module, rs_file, rs_type_name) = module_file_type(path)?;
-        self.msgs.insert(rs_module.into());
+        self.msgs.insert(rs_module);
 
         let mut lines = VecDeque::<Cow<'static, str>>::new();
 
@@ -595,7 +619,7 @@ safe_drive = {safe_drive_dep}
         };
 
         let (rs_module, rs_file, rs_type_name) = module_file_type(path)?;
-        self.srvs.insert(rs_module.into());
+        self.srvs.insert(rs_module);
 
         let mut lines = VecDeque::new();
 
@@ -645,11 +669,11 @@ safe_drive = {safe_drive_dep}
                     format!("{var_name}: {}", gen_type(type_name.as_str()))
                 }
                 ArrayInfo::Dynamic => {
-                    let type_name = gen_seq_type("crate", &type_name, 0);
+                    let type_name = gen_seq_type("crate", type_name, 0);
                     format!("{var_name}: {type_name}")
                 }
                 ArrayInfo::Limited(size) => {
-                    let type_name = gen_seq_type("crate", &type_name, *size);
+                    let type_name = gen_seq_type("crate", type_name, *size);
                     format!("{var_name}: {type_name}")
                 }
                 ArrayInfo::Static(size) => {
@@ -677,11 +701,11 @@ safe_drive = {safe_drive_dep}
                         format!("{var_name}: {scope}::msg::{module_name}::{type_name}")
                     }
                     ArrayInfo::Dynamic => {
-                        let type_name = gen_seq_type(&scope, &type_name, 0);
+                        let type_name = gen_seq_type(&scope, type_name, 0);
                         format!("{var_name}: {type_name}")
                     }
                     ArrayInfo::Limited(size) => {
-                        let type_name = gen_seq_type(&scope, &type_name, *size);
+                        let type_name = gen_seq_type(&scope, type_name, *size);
                         format!("{var_name}: {type_name}")
                     }
                     ArrayInfo::Static(size) => {
@@ -785,7 +809,7 @@ safe_drive = {safe_drive_dep}
 
         self.generate_struct(exprs, &struct_name, lib, lines);
 
-        lines.push_back(gen_impl(lib, &rs_type_name, msg_type).into());
+        lines.push_back(gen_impl(lib, rs_type_name, msg_type).into());
     }
 }
 
@@ -802,7 +826,7 @@ fn read_file(path: &Path) -> Result<String, DynError> {
 
 fn idl_array_size(dcl: &ArrayDeclarator) -> BigInt {
     dcl.array_size.iter().fold(BigInt::zero(), |val, e| {
-        if let ConstValue::Integer(n) = eval(&e) {
+        if let ConstValue::Integer(n) = eval(e) {
             val + n
         } else {
             panic!("not a integer number")
@@ -843,7 +867,7 @@ fn module_file_type(path: &Path) -> Result<(String, PathBuf, String), DynError> 
         .unwrap()
         .to_str()
         .unwrap()
-        .split(".")
+        .split('.')
         .collect();
     let camel_file_name = names[0];
     let module_name = camel_file_name.to_case(Case::Snake);
@@ -871,7 +895,7 @@ fn mangle(var_name: &str) -> Cow<'_, str> {
 fn gen_seq_type(scope: &str, type_str: &str, size: usize) -> String {
     let module_name = type_str.to_case(Case::Snake);
     let module_name = mangle(&module_name);
-    match type_str.as_ref() {
+    match type_str {
         "bool" => format!("safe_drive::msg::BoolSeq<{size}>"),
         "byte" | "uint8" => format!("safe_drive::msg::I8Seq<{size}>"),
         "int16" => format!("safe_drive::msg::I16Seq<{size}>"),
@@ -883,12 +907,12 @@ fn gen_seq_type(scope: &str, type_str: &str, size: usize) -> String {
         "uint64" => format!("safe_drive::msg::U64Seq<{size}>"),
         "float32" => format!("safe_drive::msg::F32Seq<{size}>"),
         "float64" => format!("safe_drive::msg::F64Seq<{size}>"),
-        _ => format!("{scope}::msg::{module_name}::{type_str}Seq<{size}>").into(),
+        _ => format!("{scope}::msg::{module_name}::{type_str}Seq<{size}>"),
     }
 }
 
 fn gen_type(type_str: &str) -> Cow<'_, str> {
-    match type_str.as_ref() {
+    match type_str {
         "bool" => "bool".into(),
         "byte" | "uint8" => "u8".into(),
         "char" | "int8" => "i8".into(),
@@ -917,7 +941,7 @@ enum MsgType {
 
 fn gen_impl(module_name: &str, type_name: &str, msg_type: MsgType) -> String {
     let (mid, c_func_mid, type_name_full) = match msg_type {
-        MsgType::Msg => ("msg", "", format!("{type_name}")),
+        MsgType::Msg => ("msg", "", type_name.to_string()),
         MsgType::SrvRequest => ("srv", "_Request", format!("{type_name}Request")),
         MsgType::SrvResponse => ("srv", "_Response", format!("{type_name}Response")),
     };
@@ -971,7 +995,7 @@ impl<const N: usize> {type_name_full}Seq<N> {{
         }}
         let mut msg: {type_name_full}SeqRaw = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
         if unsafe {{ {module_name}__{mid}__{type_name}{c_func_mid}__Sequence__init(&mut msg, size) }} {{
-            Some(Self {{data: msg.data, size: msg.size, capacity: msg.capacity }})
+            Some(Self {{ data: msg.data, size: msg.size, capacity: msg.capacity }})
         }} else {{
             None
         }}
@@ -979,7 +1003,7 @@ impl<const N: usize> {type_name_full}Seq<N> {{
 
     pub fn null() -> Self {{
         let msg: {type_name_full}SeqRaw = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
-        Self {{data: msg.data, size: msg.size, capacity: msg.capacity }}
+        Self {{ data: msg.data, size: msg.size, capacity: msg.capacity }}
     }}
 
     pub fn as_slice(&self) -> &[{type_name_full}] {{
@@ -1019,7 +1043,7 @@ impl<const N: usize> {type_name_full}Seq<N> {{
 
 impl<const N: usize> Drop for {type_name_full}Seq<N> {{
     fn drop(&mut self) {{
-        let mut msg = {type_name_full}SeqRaw{{data: self.data, size: self.size, capacity: self.capacity}};
+        let mut msg = {type_name_full}SeqRaw{{ data: self.data, size: self.size, capacity: self.capacity }};
         unsafe {{ {module_name}__{mid}__{type_name}{c_func_mid}__Sequence__fini(&mut msg) }};
     }}
 }}
@@ -1067,8 +1091,8 @@ impl PartialEq for {type_name} {{
 impl<const N: usize> PartialEq for {type_name}Seq<N> {{
     fn eq(&self, other: &Self) -> bool {{
         unsafe {{
-            let msg1 = {type_name}SeqRaw{{data: self.data, size: self.size, capacity: self.capacity}};
-            let msg2 = {type_name}SeqRaw{{data: other.data, size: other.size, capacity: other.capacity}};
+            let msg1 = {type_name}SeqRaw{{ data: self.data, size: self.size, capacity: self.capacity }};
+            let msg2 = {type_name}SeqRaw{{ data: other.data, size: other.size, capacity: other.capacity }};
             {module_name}__msg__{type_name}__Sequence__are_equal(&msg1, &msg2)
         }}
     }}
@@ -1111,8 +1135,8 @@ impl PartialEq for {type_name}Response {{
 impl<const N: usize> PartialEq for {type_name}RequestSeq<N> {{
     fn eq(&self, other: &Self) -> bool {{
         unsafe {{
-            let msg1 = {type_name}RequestSeqRaw{{data: self.data, size: self.size, capacity: self.capacity}};
-            let msg2 = {type_name}RequestSeqRaw{{data: other.data, size: other.size, capacity: other.capacity}};
+            let msg1 = {type_name}RequestSeqRaw{{ data: self.data, size: self.size, capacity: self.capacity }};
+            let msg2 = {type_name}RequestSeqRaw{{ data: other.data, size: other.size, capacity: other.capacity }};
             {module_name}__srv__{type_name}_Request__Sequence__are_equal(&msg1, &msg2)
         }}
     }}
@@ -1121,8 +1145,8 @@ impl<const N: usize> PartialEq for {type_name}RequestSeq<N> {{
 impl<const N: usize> PartialEq for {type_name}ResponseSeq<N> {{
     fn eq(&self, other: &Self) -> bool {{
         unsafe {{
-            let msg1 = {type_name}ResponseSeqRaw{{data: self.data, size: self.size, capacity: self.capacity}};
-            let msg2 = {type_name}ResponseSeqRaw{{data: other.data, size: other.size, capacity: other.capacity}};
+            let msg1 = {type_name}ResponseSeqRaw{{ data: self.data, size: self.size, capacity: self.capacity }};
+            let msg2 = {type_name}ResponseSeqRaw{{ data: other.data, size: other.size, capacity: other.capacity }};
             {module_name}__srv__{type_name}_Response__Sequence__are_equal(&msg1, &msg2)
         }}
     }}

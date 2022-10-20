@@ -1,4 +1,4 @@
-use std::ops::Neg;
+use std::{fmt::Display, ops::Neg};
 
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
@@ -11,6 +11,28 @@ pub enum ConstValue {
     Char(char),
     String(String),
     FloatingPoint(f64),
+}
+
+impl Display for ConstValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstValue::Integer(x) => write!(f, "{x}"),
+            ConstValue::Boolean(x) => write!(f, "{x}"),
+            ConstValue::Char(x) => write!(f, "'{x}'"),
+            ConstValue::String(x) => {
+                let mut i = 1;
+                let sharp = loop {
+                    let sharp = "#".repeat(i);
+                    if !x.contains(&sharp) {
+                        break sharp;
+                    }
+                    i += 1;
+                };
+                write!(f, "r{sharp}\"{x}\"{sharp}")
+            }
+            ConstValue::FloatingPoint(x) => write!(f, "{x}"),
+        }
+    }
 }
 
 pub fn eval(expr: &ConstExpr) -> ConstValue {
