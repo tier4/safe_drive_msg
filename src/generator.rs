@@ -360,7 +360,7 @@ safe_drive = {safe_drive_dep}
         module: Module,
         lib: &str,
     ) -> Result<(), DynError> {
-        lines.push_back(format!("\npub mod {} {{", module.id));
+        lines.push_back(format!("\npub mod {} {{", mangle(&module.id)));
 
         for expr in module.definitions.iter() {
             if let Definition::Const(const_expr) = &expr.definition {
