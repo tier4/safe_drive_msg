@@ -87,6 +87,7 @@ impl<'a> Generator<'a> {
 
         if !self.msgs.is_empty() {
             lib_file.write("#[allow(non_camel_case_types)]\n".as_bytes())?;
+            lib_file.write("#[allow(non_snake_case)]\n".as_bytes())?;
             lib_file.write_fmt(format_args!("pub mod msg;\n"))?;
 
             let mut msg_file = File::create(src_dir.join("msg.rs"))?;
