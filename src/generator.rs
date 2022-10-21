@@ -98,6 +98,8 @@ impl<'a> Generator<'a> {
         }
 
         if !self.srvs.is_empty() {
+            lib_file.write("#[allow(non_camel_case_types)]\n".as_bytes())?;
+            lib_file.write("#[allow(non_snake_case)]\n".as_bytes())?;
             lib_file.write_fmt(format_args!("pub mod srv;\n"))?;
 
             let mut srv_file = File::create(src_dir.join("srv.rs"))?;
@@ -211,6 +213,12 @@ safe_drive = {safe_drive_dep}
                                     self.generate_srv(out_dir, path, lib)?;
                                 }
                             }
+                        }
+                        Some("action") => {
+                            eprintln!("action is not supported yet.");
+                        }
+                        Some(entry) => {
+                            eprintln!("{entry} is not supported.");
                         }
                         _ => (),
                     }
@@ -400,6 +408,8 @@ safe_drive = {safe_drive_dep}
                 let value = eval(&const_expr.expr);
                 let line = format!("    pub const {}: {type_str} = {value};", const_expr.id);
                 lines.push_back(line);
+            } else {
+                eprintln!("unknown definition: {:?}", expr.definition);
             }
         }
 
