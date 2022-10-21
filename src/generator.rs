@@ -214,12 +214,6 @@ safe_drive = {safe_drive_dep}
                                 }
                             }
                         }
-                        Some("action") => {
-                            eprintln!("action is not supported yet.");
-                        }
-                        Some(entry) => {
-                            eprintln!("{entry} is not supported.");
-                        }
                         _ => (),
                     }
                 }
@@ -240,7 +234,13 @@ safe_drive = {safe_drive_dep}
         let contents = preprocess(&contents);
 
         // Parse.
-        let exprs = t4_idl_parser::parse(&contents)?;
+        let exprs = match t4_idl_parser::parse(&contents) {
+            Ok(exprs) => exprs,
+            Err(e) => {
+                eprint!("{}: failed to parse", path.display());
+                return Err(e);
+            }
+        };
 
         let mut lines = VecDeque::new();
 
@@ -248,7 +248,7 @@ safe_drive = {safe_drive_dep}
 
         for expr in exprs {
             if let Definition::Module(module) = expr.definition {
-                idl_type = self.generate_idl_module_1st(&mut lines, module, lib)?;
+                idl_type = self.generate_idl_module_1st(path, &mut lines, module, lib)?;
                 break;
             }
         }
@@ -303,6 +303,7 @@ safe_drive = {safe_drive_dep}
 
     fn generate_idl_module_1st(
         &mut self,
+        path: &Path,
         lines: &mut VecDeque<String>,
         module: Module,
         lib: &str,
@@ -315,15 +316,56 @@ safe_drive = {safe_drive_dep}
 
         for expr in module.definitions {
             if let Definition::Module(module_2nd) = expr.definition {
-                result = self.generate_idl_module_2nd(lines, module_2nd, lib)?;
+                result = self.generate_idl_module_2nd(path, lines, module_2nd, lib)?;
             }
         }
 
         Ok(result)
     }
 
+    fn generate_idl_msg(
+        &mut self,
+        lines: &mut VecDeque<String>,
+        struct_def: &StructDef,
+        lib: &str,
+    ) {
+        self.idl_struct(lines, &struct_def, lib);
+        lines.push_back(gen_impl_for_struct(lib, "msg", &struct_def.id));
+        lines.push_back(gen_impl_topic_msg(lib, &struct_def.id));
+
+        lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
+    }
+
+    fn generate_idl_srv(
+        &mut self,
+        idl_type: &IDLType,
+        lines: &mut VecDeque<String>,
+        struct_def: &StructDef,
+        lib: &str,
+    ) -> IDLType {
+        let type_str = if struct_def.id.ends_with("_Request") {
+            struct_def.id.strip_suffix("_Request").unwrap()
+        } else if struct_def.id.ends_with("_Response") {
+            struct_def.id.strip_suffix("_Response").unwrap()
+        } else {
+            panic!("srv contains structs which are neither request nor response");
+        };
+
+        if *idl_type == IDLType::NoType {
+            lines.push_front("use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};".to_string());
+            lines.push_back(gen_impl_service_msg(lib, type_str));
+        }
+
+        // Generate struct.
+        self.idl_struct(lines, &struct_def, lib);
+        lines.push_back(gen_impl_for_struct(lib, "srv", &struct_def.id));
+
+        IDLType::Srv(type_str.to_string())
+    }
+
     fn generate_idl_module_2nd(
         &mut self,
+        path: &Path,
         lines: &mut VecDeque<String>,
         module: Module,
         lib: &str,
@@ -334,45 +376,30 @@ safe_drive = {safe_drive_dep}
             match expr.definition {
                 Definition::Type(TypeDcl::ConstrType(ConstrTypeDcl::Struct(StructDcl::Def(
                     struct_def,
-                )))) => {
-                    if module.id == "msg" {
-                        println!("msg: struct {}", struct_def.id);
-
-                        // Generate struct.
-                        self.idl_struct(lines, &struct_def, lib);
-                        lines.push_back(gen_impl_for_struct(lib, "msg", &struct_def.id));
-                        lines.push_back(gen_impl_topic_msg(lib, &struct_def.id));
-
-                        lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
+                )))) => match module.id.as_str() {
+                    "msg" => {
+                        self.generate_idl_msg(lines, &struct_def, lib);
 
                         assert_eq!(result, IDLType::NoType);
                         result = IDLType::Msg(struct_def.id);
-                    } else if module.id == "srv" {
-                        println!("srv: struct {}", struct_def.id);
-
-                        let type_str = if struct_def.id.ends_with("_Request") {
-                            struct_def.id.strip_suffix("_Request").unwrap()
-                        } else if struct_def.id.ends_with("_Response") {
-                            struct_def.id.strip_suffix("_Response").unwrap()
-                        } else {
-                            panic!("srv contains structs which are neither request nor response");
-                        };
-
-                        if result == IDLType::NoType {
-                            lines.push_front(
-                                "use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};"
-                                    .to_string(),
-                            );
-                            lines.push_back(gen_impl_service_msg(lib, type_str));
-                        }
-
-                        self.idl_struct(lines, &struct_def, lib);
-                        lines.push_back(gen_impl_for_struct(lib, "srv", &struct_def.id));
+                    }
+                    "srv" => {
+                        let idl_type = self.generate_idl_srv(&result, lines, &struct_def, lib);
 
                         assert!(matches!(result, IDLType::NoType | IDLType::Srv(_)));
-                        result = IDLType::Srv(type_str.to_string());
+                        result = idl_type;
                     }
-                }
+                    "action" => eprintln!(
+                        "{}:{}: action is not yet supported",
+                        path.display(),
+                        struct_def.id
+                    ),
+                    entry => eprintln!(
+                        "{}:{}: {entry} is not supported",
+                        path.display(),
+                        struct_def.id
+                    ),
+                },
                 Definition::Module(module_3rd) => {
                     self.generate_idl_module_3rd(lines, module_3rd, lib)?
                 }
