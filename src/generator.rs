@@ -191,22 +191,24 @@ safe_drive = {safe_drive_dep}
                 // file
                 if let Some(ext) = path.extension() {
                     match ext.to_str() {
-                        Some("msg") => self.generate_msg(out_dir, path, lib)?,
-                        Some("srv") => self.generate_srv(out_dir, path, lib)?,
-                        Some("idl") => {
+                        Some("idl") => self.generate_idl(out_dir, path, lib)?,
+                        Some("msg") => {
                             if let Some(stem) = path.file_stem() {
-                                let msg_file = format!("{}.msg", stem.to_str().unwrap());
-                                let srv_file = format!("{}.srv", stem.to_str().unwrap());
-
-                                let msg_file = Path::new(&msg_file);
-                                let srv_file = Path::new(&srv_file);
-
-                                if msg_file.exists() || srv_file.exists() {
-                                    return Ok(());
+                                let idl_file = format!("{}.msg", stem.to_str().unwrap());
+                                let idl_file = Path::new(&idl_file);
+                                if !idl_file.exists() {
+                                    self.generate_msg(out_dir, path, lib)?;
                                 }
                             }
-
-                            self.generate_idl(out_dir, path, lib)?
+                        }
+                        Some("srv") => {
+                            if let Some(stem) = path.file_stem() {
+                                let idl_file = format!("{}.msg", stem.to_str().unwrap());
+                                let idl_file = Path::new(&idl_file);
+                                if !idl_file.exists() {
+                                    self.generate_srv(out_dir, path, lib)?;
+                                }
+                            }
                         }
                         _ => (),
                     }
@@ -325,19 +327,40 @@ safe_drive = {safe_drive_dep}
                 )))) => {
                     if module.id == "msg" {
                         println!("msg: struct {}", struct_def.id);
-                        lines.push_back(gen_c_extern_msg(lib, &struct_def.id));
 
+                        // Generate struct.
                         self.idl_struct(lines, &struct_def, lib);
+                        lines.push_back(gen_impl_for_struct(lib, "msg", &struct_def.id));
+                        lines.push_back(gen_impl_topic_msg(lib, &struct_def.id));
 
-                        lines.push_back(gen_impl(lib, &struct_def.id, MsgType::Msg));
-                        lines.push_back(gen_impl_for_msg(lib, &struct_def.id));
                         lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
 
                         assert_eq!(result, IDLType::NoType);
                         result = IDLType::Msg(struct_def.id);
                     } else if module.id == "srv" {
                         println!("srv: struct {}", struct_def.id);
-                        todo!()
+
+                        let type_str = if struct_def.id.ends_with("_Request") {
+                            struct_def.id.strip_suffix("_Request").unwrap()
+                        } else if struct_def.id.ends_with("_Response") {
+                            struct_def.id.strip_suffix("_Response").unwrap()
+                        } else {
+                            panic!("srv contains structs which are neither request nor response");
+                        };
+
+                        if result == IDLType::NoType {
+                            lines.push_front(
+                                "use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};"
+                                    .to_string(),
+                            );
+                            lines.push_back(gen_impl_service_msg(lib, type_str));
+                        }
+
+                        self.idl_struct(lines, &struct_def, lib);
+                        lines.push_back(gen_impl_for_struct(lib, "srv", &struct_def.id));
+
+                        assert!(matches!(result, IDLType::NoType | IDLType::Srv(_)));
+                        result = IDLType::Srv(type_str.to_string());
                     }
                 }
                 Definition::Module(module_3rd) => {
@@ -366,7 +389,7 @@ safe_drive = {safe_drive_dep}
             if let Definition::Const(const_expr) = &expr.definition {
                 let type_str = match &const_expr.const_type {
                     ConstType::PrimitiveType(t) => idl_primitive(t).to_string(),
-                    ConstType::StringType(t) => idl_string_type(t),
+                    ConstType::StringType(_) => "&str".to_string(),
                     ConstType::ScopedName(t) => self.idl_scoped_name(t, lib),
                     ConstType::WStringType(_) => unimplemented!(),
                     ConstType::FixedPointConst => unimplemented!(),
@@ -384,7 +407,7 @@ safe_drive = {safe_drive_dep}
     }
 
     fn idl_struct(&mut self, lines: &mut VecDeque<String>, struct_def: &StructDef, lib: &str) {
-        lines.push_back("#[repr(C)]".to_string());
+        lines.push_back("\n#[repr(C)]".to_string());
         lines.push_back("#[derive(Debug)]".to_string());
         lines.push_back(format!("pub struct {} {{", struct_def.id));
         for member in struct_def.members.iter() {
@@ -1155,6 +1178,193 @@ impl<const N: usize> PartialEq for {type_name}ResponseSeq<N> {{
     )
 }
 
+fn gen_impl_topic_msg(module_name: &str, type_name: &str) -> String {
+    // generate impl and struct of sequence
+    format!(
+        "impl TopicMsg for {type_name} {{
+    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__msg__{type_name}()
+        }}
+    }}
+}}
+"
+    )
+}
+
+fn gen_impl_for_struct(module_name_1st: &str, module_name_2nd: &str, type_name: &str) -> String {
+    format!(
+        "
+extern \"C\" {{
+    fn {module_name_1st}__{module_name_2nd}__{type_name}__init(msg: *mut {type_name}) -> bool;
+    fn {module_name_1st}__{module_name_2nd}__{type_name}__fini(msg: *mut {type_name});
+    fn {module_name_1st}__{module_name_2nd}__{type_name}__are_equal(lhs: *const {type_name}, rhs: *const {type_name}) -> bool;
+    fn {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__init(msg: *mut {type_name}SeqRaw, size: usize) -> bool;
+    fn {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__fini(msg: *mut {type_name}SeqRaw);
+    fn {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__are_equal(lhs: *const {type_name}SeqRaw, rhs: *const {type_name}SeqRaw) -> bool;
+    fn rosidl_typesupport_c__get_message_type_support_handle__{module_name_1st}__{module_name_2nd}__{type_name}() -> *const rcl::rosidl_message_type_support_t;
+}}
+
+impl PartialEq for {type_name} {{
+    fn eq(&self, other: &Self) -> bool {{
+        unsafe {{
+            {module_name_1st}__{module_name_2nd}__{type_name}__are_equal(self, other)
+        }}
+    }}
+}}
+
+impl<const N: usize> PartialEq for {type_name}Seq<N> {{
+    fn eq(&self, other: &Self) -> bool {{
+        unsafe {{
+            let msg1 = {type_name}SeqRaw{{ data: self.data, size: self.size, capacity: self.capacity }};
+            let msg2 = {type_name}SeqRaw{{ data: other.data, size: other.size, capacity: other.capacity }};
+            {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__are_equal(&msg1, &msg2)
+        }}
+    }}
+}}
+
+impl {type_name} {{
+    pub fn new() -> Option<Self> {{
+        let mut msg: Self = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
+        if unsafe {{ {module_name_1st}__{module_name_2nd}__{type_name}__init(&mut msg) }} {{
+            Some(msg)
+        }} else {{
+            None
+        }}
+    }}
+}}
+
+impl Drop for {type_name} {{
+    fn drop(&mut self) {{
+        unsafe {{ {module_name_1st}__{module_name_2nd}__{type_name}__fini(self) }};
+    }}
+}}
+
+#[repr(C)]
+#[derive(Debug)]
+struct {type_name}SeqRaw {{
+    data: *mut {type_name},
+    size: usize,
+    capacity: usize,
+}}
+
+/// Sequence of {type_name}.
+/// `N` is the maximum number of elements.
+/// If `N` is `0`, the size is unlimited.
+#[repr(C)]
+#[derive(Debug)]
+pub struct {type_name}Seq<const N: usize> {{
+    data: *mut {type_name},
+    size: usize,
+    capacity: usize,
+}}
+
+impl<const N: usize> {type_name}Seq<N> {{
+    /// Create a sequence of.
+    /// `N` represents the maximum number of elements.
+    /// If `N` is `0`, the sequence is unlimited.
+    pub fn new(size: usize) -> Option<Self> {{
+        if N != 0 && size >= N {{
+            // the size exceeds in the maximum number
+            return None;
+        }}
+        let mut msg: {type_name}SeqRaw = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
+        if unsafe {{ {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__init(&mut msg, size) }} {{
+            Some(Self {{ data: msg.data, size: msg.size, capacity: msg.capacity }})
+        }} else {{
+            None
+        }}
+    }}
+
+    pub fn null() -> Self {{
+        let msg: {type_name}SeqRaw = unsafe {{ std::mem::MaybeUninit::zeroed().assume_init() }};
+        Self {{ data: msg.data, size: msg.size, capacity: msg.capacity }}
+    }}
+
+    pub fn as_slice(&self) -> &[{type_name}] {{
+        if self.data.is_null() {{
+            &[]
+        }} else {{
+            let s = unsafe {{ std::slice::from_raw_parts(self.data, self.size) }};
+            s
+        }}
+    }}
+
+    pub fn as_slice_mut(&mut self) -> &mut [{type_name}] {{
+        if self.data.is_null() {{
+            &mut []
+        }} else {{
+            let s = unsafe {{ std::slice::from_raw_parts_mut(self.data, self.size) }};
+            s
+        }}
+    }}
+
+    pub fn iter(&self) -> std::slice::Iter<'_, {type_name}> {{
+        self.as_slice().iter()
+    }}
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, {type_name}> {{
+        self.as_slice_mut().iter_mut()
+    }}
+
+    pub fn len(&self) -> usize {{
+        self.as_slice().len()
+    }}
+
+    pub fn is_empty(&self) -> bool {{
+        self.len() == 0
+    }}
+}}
+
+impl<const N: usize> Drop for {type_name}Seq<N> {{
+    fn drop(&mut self) {{
+        let mut msg = {type_name}SeqRaw{{ data: self.data, size: self.size, capacity: self.capacity }};
+        unsafe {{ {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__fini(&mut msg) }};
+    }}
+}}
+
+unsafe impl<const N: usize> Send for {type_name}Seq<N> {{}}
+unsafe impl<const N: usize> Sync for {type_name}Seq<N> {{}}")
+}
+
+fn gen_impl_service_msg(module_name: &str, type_name: &str) -> String {
+    format!(
+        "
+extern \"C\" {{
+    fn rosidl_typesupport_c__get_service_type_support_handle__{module_name}__srv__{type_name}() -> *const rcl::rosidl_service_type_support_t;
+}}
+
+#[derive(Debug)]
+pub struct {type_name};
+
+impl ServiceMsg for {type_name} {{
+    type Request = {type_name}_Request;
+    type Response = {type_name}_Response;
+    fn type_support() -> *const rcl::rosidl_service_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_service_type_support_handle__{module_name}__srv__{type_name}()
+        }}
+    }}
+}}
+
+impl TypeSupport for {type_name}_Request {{
+    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Request()
+        }}
+    }}
+}}
+
+impl TypeSupport for {type_name}_Response {{
+    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Response()
+        }}
+    }}
+}}"
+    )
+}
+
 fn gen_c_extern_srv(module_name: &str, type_name: &str) -> String {
     format!(
         "
@@ -1200,7 +1410,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_idl() {
+    fn test_idl_srv() {
+        let input = r#"
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from example_msg/srv/AddThreeInts.srv
+// generated code does not contain a copyright notice
+
+
+module example_msg {
+    module srv {
+        struct AddThreeInts_Request {
+            int64 a;
+
+            int64 b;
+
+            int64 c;
+        };
+        module AddThreeInts_Response_Constants {
+            const string PLANNING = "Planning";
+        };
+        struct AddThreeInts_Response {
+            int64 sum;
+        };
+    };
+};"#;
+
+        let idl_path = Path::new("/tmp/AddThreeInts.idl");
+        {
+            let mut f = File::create(idl_path).unwrap();
+            f.write_all(input.as_bytes()).unwrap();
+        }
+
+        let mut g = Generator::new(SafeDrive::Version("0.1"));
+        g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_idl_msg() {
         let input = r#"
 module example_msg {
     module msg {
