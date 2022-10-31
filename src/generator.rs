@@ -27,6 +27,7 @@ use t4_idl_parser::expr::{
 pub struct Generator<'a> {
     msgs: BTreeSet<String>,
     srvs: BTreeSet<String>,
+    actions: BTreeSet<String>,
     pub(crate) dependencies: BTreeSet<String>,
     safe_drive: SafeDrive<'a>,
 }
@@ -35,6 +36,7 @@ pub struct Generator<'a> {
 enum IDLType {
     Msg(String),
     Srv(String),
+    Action(String),
     NoType,
 }
 
@@ -45,6 +47,7 @@ impl<'a> Generator<'a> {
         Self {
             msgs: Default::default(),
             srvs: Default::default(),
+            actions: Default::default(),
             dependencies: Default::default(),
             safe_drive,
         }
@@ -106,6 +109,18 @@ impl<'a> Generator<'a> {
             for srv in self.srvs.iter() {
                 srv_file.write_fmt(format_args!("pub mod {srv};\n"))?;
                 srv_file.write_fmt(format_args!("pub use {srv}::*;\n\n"))?;
+            }
+        }
+
+        if !self.actions.is_empty() {
+            lib_file.write("#[allow(non_camel_case_types)]\n".as_bytes())?;
+            lib_file.write("#[allow(non_snake_case)]\n".as_bytes())?;
+            lib_file.write_fmt(format_args!("pub mod action;\n"))?;
+
+            let mut action_file = File::create(src_dir.join("action.rs"))?;
+            for action in self.actions.iter() {
+                action_file.write_fmt(format_args!("pub mod {action};\n"))?;
+                action_file.write_fmt(format_args!("pub use {action}::*;\n\n"))?;
             }
         }
 
@@ -198,8 +213,8 @@ safe_drive = {safe_drive_dep}
                         Some("idl") => self.generate_idl(out_dir, path, lib)?,
                         Some("msg") => {
                             if let Some(stem) = path.file_stem() {
-                                let idl_file = format!("{}.msg", stem.to_str().unwrap());
-                                let idl_file = Path::new(&idl_file);
+                                let idl_file = format!("{}.idl", stem.to_str().unwrap());
+                                let idl_file = path.parent().unwrap().join(idl_file);
                                 if !idl_file.exists() {
                                     self.generate_msg(out_dir, path, lib)?;
                                 }
@@ -207,7 +222,8 @@ safe_drive = {safe_drive_dep}
                         }
                         Some("srv") => {
                             if let Some(stem) = path.file_stem() {
-                                let idl_file = format!("{}.msg", stem.to_str().unwrap());
+                                let idl_file = format!("{}.idl", stem.to_str().unwrap());
+                                let idl_file = path.parent().unwrap().join(idl_file);
                                 let idl_file = Path::new(&idl_file);
                                 if !idl_file.exists() {
                                     self.generate_srv(out_dir, path, lib)?;
@@ -256,6 +272,7 @@ safe_drive = {safe_drive_dep}
         let rs_type_name = match &idl_type {
             IDLType::Msg(t) => t,
             IDLType::Srv(t) => t,
+            IDLType::Action(t) => t,
             IDLType::NoType => return Ok(()),
         };
 
@@ -284,13 +301,18 @@ safe_drive = {safe_drive_dep}
                 // Path to the file.
                 out_dir.join(&rs_file)
             }
+            IDLType::Action(_) => {
+                self.actions.insert(rs_module.into());
+
+                // Create directories.
+                let out_dir = out_lib_dir.join(lib).join("src").join("action");
+                std::fs::create_dir_all(&out_dir)?;
+
+                // Path to the file.
+                out_dir.join(&rs_file)
+            }
             IDLType::NoType => return Ok(()),
         };
-
-        // Print.
-        for line in lines.iter() {
-            println!("{line}");
-        }
 
         // Write.
         let mut f = File::create(out_file)?;
@@ -331,9 +353,8 @@ safe_drive = {safe_drive_dep}
     ) {
         self.idl_struct(lines, &struct_def, lib);
         lines.push_back(gen_impl_for_struct(lib, "msg", &struct_def.id));
-        lines.push_back(gen_impl_topic_msg(lib, &struct_def.id));
 
-        lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
+        lines.push_front("use safe_drive::{msg::TypeSupport, rcl};".into());
     }
 
     fn generate_idl_srv(
@@ -353,7 +374,7 @@ safe_drive = {safe_drive_dep}
 
         if *idl_type == IDLType::NoType {
             lines.push_front("use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};".to_string());
-            lines.push_back(gen_impl_service_msg(lib, type_str));
+            lines.push_back(gen_impl_service_msg(lib, "srv", type_str));
         }
 
         // Generate struct.
@@ -361,6 +382,83 @@ safe_drive = {safe_drive_dep}
         lines.push_back(gen_impl_for_struct(lib, "srv", &struct_def.id));
 
         IDLType::Srv(type_str.to_string())
+    }
+
+    fn generate_idl_action(
+        &mut self,
+        idl_type: &IDLType,
+        lines: &mut VecDeque<String>,
+        struct_def: &StructDef,
+        lib: &str,
+    ) -> IDLType {
+        enum ActionType {
+            Goal,
+            Result,
+            Feedback,
+        }
+
+        let (type_str, suffix) = if struct_def.id.ends_with("_Goal") {
+            (
+                struct_def.id.strip_suffix("_Goal").unwrap(),
+                ActionType::Goal,
+            )
+        } else if struct_def.id.ends_with("_Result") {
+            (
+                struct_def.id.strip_suffix("_Result").unwrap(),
+                ActionType::Result,
+            )
+        } else if struct_def.id.ends_with("_Feedback") {
+            (
+                struct_def.id.strip_suffix("_Feedback").unwrap(),
+                ActionType::Feedback,
+            )
+        } else {
+            panic!("srv contains structs which are neither request nor response");
+        };
+
+        if *idl_type == IDLType::NoType {
+            lines.push_front(
+                "use safe_drive::{msg::{ActionMsg, ServiceMsg, TypeSupport}, rcl};".to_string(),
+            );
+            lines.push_back(gen_impl_action_msg(lib, type_str));
+        }
+
+        // Generate struct.
+        self.idl_struct(lines, &struct_def, lib);
+        lines.push_back(gen_impl_for_struct(lib, "action", &struct_def.id));
+
+        match suffix {
+            ActionType::Goal => {
+                let request = format!("{type_str}_SendGoal_Request");
+                lines.push_back(gen_impl_for_struct(lib, "action", &request));
+
+                let response = format!("{type_str}_SendGoal_Response");
+                lines.push_back(gen_impl_for_struct(lib, "action", &response));
+
+                let service = format!("{type_str}_SendGoal");
+                lines.push_back(gen_impl_service_msg(lib, "action", &service));
+            }
+            ActionType::Result => {
+                let request = format!("{type_str}_GetResult_Request");
+                lines.push_back(gen_impl_for_struct(lib, "action", &request));
+
+                let response = format!("{type_str}_GetResult_Response");
+                lines.push_back(gen_impl_for_struct(lib, "action", &response));
+
+                let service = format!("{type_str}_GetResult");
+                lines.push_back(gen_impl_service_msg(lib, "action", &service));
+            }
+            ActionType::Feedback => {
+                let message = format!("{type_str}_FeedbackMessage");
+                lines.push_back(gen_impl_for_struct(lib, "action", &message));
+            }
+        }
+
+        self.dependencies
+            .insert("unique_identifier_msgs".to_string());
+        self.dependencies.insert("builtin_interfaces".to_string());
+
+        IDLType::Action(type_str.to_string())
     }
 
     fn generate_idl_module_2nd(
@@ -389,11 +487,12 @@ safe_drive = {safe_drive_dep}
                         assert!(matches!(result, IDLType::NoType | IDLType::Srv(_)));
                         result = idl_type;
                     }
-                    "action" => eprintln!(
-                        "{}:{}: action is not yet supported",
-                        path.display(),
-                        struct_def.id
-                    ),
+                    "action" => {
+                        let idl_type = self.generate_idl_action(&result, lines, &struct_def, lib);
+
+                        assert!(matches!(result, IDLType::NoType | IDLType::Action(_)));
+                        result = idl_type;
+                    }
                     entry => eprintln!(
                         "{}:{}: {entry} is not supported",
                         path.display(),
@@ -594,8 +693,6 @@ safe_drive = {safe_drive_dep}
             }
         }
 
-        println!("{:?}", result);
-
         result
     }
 
@@ -650,7 +747,7 @@ safe_drive = {safe_drive_dep}
         self.generate_exprs(&exprs, &mut lines, lib, &rs_type_name, MsgType::Msg);
 
         lines.push_back(gen_impl_for_msg(lib, &rs_type_name).into());
-        lines.push_front("use safe_drive::{msg::TopicMsg, rcl};".into());
+        lines.push_front("use safe_drive::{msg::TypeSupport, rcl};".into());
 
         // Create a directory.
         let out_dir = out_lib_dir.join(lib).join("src").join("msg");
@@ -705,7 +802,7 @@ safe_drive = {safe_drive_dep}
         );
 
         lines.push_back(gen_impl_for_srv(lib, &rs_type_name).into());
-        lines.push_front("use safe_drive::{msg::ServiceMsg, rcl};".into());
+        lines.push_front("use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};".into());
 
         // Create a directory.
         let out_dir = out_lib_dir.join(lib).join("src").join("srv");
@@ -1134,7 +1231,7 @@ extern \"C\" {{
 fn gen_impl_for_msg(module_name: &str, type_name: &str) -> String {
     // generate impl and struct of sequence
     format!(
-        "impl TopicMsg for {type_name} {{
+        "impl TypeSupport for {type_name} {{
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__msg__{type_name}()
@@ -1213,17 +1310,24 @@ impl<const N: usize> PartialEq for {type_name}ResponseSeq<N> {{
         }}
     }}
 }}
-"
-    )
-}
 
-fn gen_impl_topic_msg(module_name: &str, type_name: &str) -> String {
-    // generate impl and struct of sequence
-    format!(
-        "impl TopicMsg for {type_name} {{
+extern \"C\" {{
+    fn rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Request() -> *const rcl::rosidl_message_type_support_t;
+    fn rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Response() -> *const rcl::rosidl_message_type_support_t;
+}}
+
+impl TypeSupport for {type_name}Request {{
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
-            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__msg__{type_name}()
+            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Request()
+        }}
+    }}
+}}
+
+impl TypeSupport for {type_name}Response {{
+    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Response()
         }}
     }}
 }}
@@ -1242,6 +1346,14 @@ extern \"C\" {{
     fn {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__fini(msg: *mut {type_name}SeqRaw);
     fn {module_name_1st}__{module_name_2nd}__{type_name}__Sequence__are_equal(lhs: *const {type_name}SeqRaw, rhs: *const {type_name}SeqRaw) -> bool;
     fn rosidl_typesupport_c__get_message_type_support_handle__{module_name_1st}__{module_name_2nd}__{type_name}() -> *const rcl::rosidl_message_type_support_t;
+}}
+
+impl TypeSupport for {type_name} {{
+    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_message_type_support_handle__{module_name_1st}__{module_name_2nd}__{type_name}()
+        }}
+    }}
 }}
 
 impl PartialEq for {type_name} {{
@@ -1366,11 +1478,11 @@ unsafe impl<const N: usize> Send for {type_name}Seq<N> {{}}
 unsafe impl<const N: usize> Sync for {type_name}Seq<N> {{}}")
 }
 
-fn gen_impl_service_msg(module_name: &str, type_name: &str) -> String {
+fn gen_impl_service_msg(module_name: &str, module_2nd: &str, type_name: &str) -> String {
     format!(
         "
 extern \"C\" {{
-    fn rosidl_typesupport_c__get_service_type_support_handle__{module_name}__srv__{type_name}() -> *const rcl::rosidl_service_type_support_t;
+    fn rosidl_typesupport_c__get_service_type_support_handle__{module_name}__{module_2nd}__{type_name}() -> *const rcl::rosidl_service_type_support_t;
 }}
 
 #[derive(Debug)]
@@ -1381,25 +1493,67 @@ impl ServiceMsg for {type_name} {{
     type Response = {type_name}_Response;
     fn type_support() -> *const rcl::rosidl_service_type_support_t {{
         unsafe {{
-            rosidl_typesupport_c__get_service_type_support_handle__{module_name}__srv__{type_name}()
+            rosidl_typesupport_c__get_service_type_support_handle__{module_name}__{module_2nd}__{type_name}()
+        }}
+    }}
+}}
+"
+    )
+}
+
+fn gen_impl_action_msg(module_name: &str, type_name: &str) -> String {
+    format!(
+        "
+extern \"C\" {{
+    fn rosidl_typesupport_c__get_action_type_support_handle__{module_name}__action__{type_name}() -> *const rcl::rosidl_action_type_support_t;
+}}
+
+#[derive(Debug)]
+pub struct {type_name};
+
+impl ActionMsg for {type_name} {{
+    type Goal = {type_name}_SendGoal;
+    type Result = {type_name}_GetResult;
+    type Feedback = {type_name}_Feedback;
+    fn type_support() -> *const rcl::rosidl_action_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_action_type_support_handle__{module_name}__action__{type_name}()
         }}
     }}
 }}
 
-impl TypeSupport for {type_name}_Request {{
-    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
-        unsafe {{
-            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Request()
-        }}
-    }}
+#[repr(C)]
+#[derive(Debug)]
+pub struct {type_name}_SendGoal_Request {{
+    pub goal_id: unique_identifier_msgs::msg::UUID,
+    pub goal: {type_name}_Goal,
 }}
 
-impl TypeSupport for {type_name}_Response {{
-    fn type_support() -> *const rcl::rosidl_message_type_support_t {{
-        unsafe {{
-            rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Response()
-        }}
-    }}
+#[repr(C)]
+#[derive(Debug)]
+pub struct {type_name}_SendGoal_Response {{
+    pub accepted: bool,
+    pub stamp: builtin_interfaces::msg::Time,
+}}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct {type_name}_GetResult_Request {{
+    pub goal_id: unique_identifier_msgs::msg::UUID,
+}}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct {type_name}_GetResult_Response {{
+    pub status: u8,
+    pub result: {type_name}_Result,
+}}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct {type_name}_FeedbackMessage {{
+    pub goal_id: unique_identifier_msgs::msg::UUID,
+    pub feedback: {type_name}_Feedback,
 }}"
     )
 }
@@ -1447,6 +1601,34 @@ fn idl_primitive(prim_type: &PrimitiveType) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_idl_action() {
+        let input = r#"
+module example_msg {
+    module action {
+        struct MyAction_Goal {
+            int64 a;
+        };
+        struct MyAction_Result {
+            int64 b;
+        };
+        struct MyAction_Feedback {
+            int64 c;
+        };
+    };
+};
+"#;
+        let idl_path = Path::new("/tmp/MyAction.idl");
+        {
+            let mut f = File::create(idl_path).unwrap();
+            f.write_all(input.as_bytes()).unwrap();
+        }
+
+        let mut g = Generator::new(SafeDrive::Version("0.1"));
+        g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
+            .unwrap();
+    }
 
     #[test]
     fn test_idl_srv() {
