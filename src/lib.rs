@@ -1,4 +1,6 @@
-//! https://github.com/ament/ament_cmake/blob/master/ament_cmake_core/doc/resource_index.md
+//! # Transpiler from ROS2's message types to Rust's types.
+//!
+//! See https://github.com/ament/ament_cmake/blob/master/ament_cmake_core/doc/resource_index.md
 
 pub(crate) mod generator;
 pub(crate) mod idl;
@@ -18,6 +20,18 @@ pub enum SafeDrive<'a> {
     Version(&'a str),
 }
 
+/// Transpile ROS2's message types to Rust's types.
+/// Dependencies will be automatically
+///
+/// # Example
+///
+/// ```
+/// use safe_drive_msg;
+/// use std::path::Path;
+///
+/// let dependencies = ["std_msgs", "std_srvs"];
+/// safe_drive_msg::depends(&Path::new("/tmp/output_dir"), &dependencies, safe_drive_msg::SafeDrive::Version("0.1"));
+/// ```
 pub fn depends(outdir: &Path, libs: &[&str], safe_drive: SafeDrive) -> Result<(), DynError> {
     let ament_paths = std::env::var("AMENT_PREFIX_PATH")?;
     let ament_paths: Vec<_> = ament_paths
