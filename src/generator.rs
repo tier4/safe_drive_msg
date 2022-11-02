@@ -555,27 +555,20 @@ safe_drive = {safe_drive_dep}
     }
 
     fn idl_member(&mut self, lines: &mut VecDeque<String>, member: &Member, lib: &str) {
+        let type_str = self.idl_type_spec(&member.type_spec, lib);
+        let type_str = if type_str == "string" {
+            "safe_drive::msg::RosString<0>".to_string()
+        } else {
+            type_str
+        };
+
         for declarator in member.declarators.iter() {
             match declarator {
                 AnyDeclarator::Simple(id) => {
-                    let type_str = self.idl_type_spec(&member.type_spec, lib);
-                    let type_str = if type_str == "string" {
-                        "safe_drive::msg::RosString<0>".to_string()
-                    } else {
-                        type_str
-                    };
-
                     let id = mangle(&id);
                     lines.push_back(format!("    pub {id}: {type_str},"));
                 }
                 AnyDeclarator::Array(dcl) => {
-                    let type_str = self.idl_type_spec(&member.type_spec, lib);
-                    let type_str = if type_str == "string" {
-                        "safe_drive::msg::RosStringSeq<0, 0>".to_string()
-                    } else {
-                        type_str
-                    };
-
                     let size = idl_array_size(dcl);
                     let id = mangle(&dcl.id);
                     lines.push_back(format!("    pub {id}: [{type_str}; {size}],"));
