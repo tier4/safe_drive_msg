@@ -1,7 +1,15 @@
 [package]
 name = "safe_drive_msg"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
+authors = [ "Yuuki Takano <yuuki.takano@tier4.jp>, TIER IV, Inc." ]
+description = "A transpiler from ROS2's message types to Rust's types."
+license-file = "LICENSE"
+readme = "README.md"
+keywords = ["ROS2", "robotics" ]
+categories = [ "science::robotics" ]
+repository = "https://github.com/tier4/safe_drive_msg"
+homepage = "https://github.com/tier4/safe_drive_msg"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -9,6 +17,6 @@ edition = "2021"
 nom = "7"
 convert_case = "0.6"
 checksumdir = "0.3"
-t4_idl_parser = { path = "../idl_parser" }
+t4_idl_parser = "0.1"
 num-bigint = "0.4"
 num-traits = "0.2"
