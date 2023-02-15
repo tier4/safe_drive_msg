@@ -255,7 +255,7 @@ fn parse_mutable_var(input: &str) -> PResult<(String, Option<ValueType>)> {
 fn parse_immutable_var(input: &str) -> PResult<(String, Option<ValueType>)> {
     // parse variable name
     // $CapitalID
-    let (input, var_name) = parse_captal_identifier(input)?;
+    let (input, var_name) = parse_capital_identifier(input)?;
 
     // skip whitespaces
     let (input, _) = space0(input)?;
@@ -352,7 +352,7 @@ fn parse_identifier(input: &str) -> PResult<String> {
 /// ```text
 /// $ID = Regex((_|[A..Z]+)([A..Z0..9]|_)*)
 /// ```
-fn parse_captal_identifier(input: &str) -> PResult<String> {
+fn parse_capital_identifier(input: &str) -> PResult<String> {
     // (_|[A..Z]+)
     let (input, head) = satisfy(|c| ('A'..='Z').contains(&c) || c == '_')(input)?;
 

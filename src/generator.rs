@@ -80,7 +80,7 @@ impl<'a> Generator<'a> {
     }
 
     fn generate_crate(&self, out_dir: &Path, lib: &str) -> Result<(), DynError> {
-        if self.msgs.is_empty() && self.srvs.is_empty() {
+        if self.msgs.is_empty() && self.srvs.is_empty() && self.actions.is_empty() {
             return Ok(());
         }
 
