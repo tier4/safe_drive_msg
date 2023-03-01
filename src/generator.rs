@@ -1243,10 +1243,20 @@ fn gen_impl_for_msg(module_name: &str, type_name: &str) -> String {
     // generate impl and struct of sequence
     format!(
         "impl TypeSupport for {type_name} {{
+    type T = {type_name};
+
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__msg__{type_name}()
         }}
+    }}
+
+    fn as_mut(&mut self) -> &mut Self::T {{
+        self
+    }}
+
+    fn as_ref(&self) -> &Self::T {{
+        self
     }}
 }}
 
@@ -1328,18 +1338,38 @@ extern \"C\" {{
 }}
 
 impl TypeSupport for {type_name}Request {{
+    type T = {type_name}Request;
+
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Request()
         }}
     }}
+
+    fn as_mut(&mut self) -> &mut Self::T {{
+        self
+    }}
+
+    fn as_ref(&self) -> &Self::T {{
+        self
+    }}
 }}
 
 impl TypeSupport for {type_name}Response {{
+    type T = {type_name}Response;
+
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Response()
         }}
+    }}
+
+    fn as_mut(&mut self) -> &mut Self::T {{
+        self
+    }}
+
+    fn as_ref(&self) -> &Self::T {{
+        self
     }}
 }}
 "
@@ -1360,10 +1390,20 @@ extern \"C\" {{
 }}
 
 impl TypeSupport for {type_name} {{
+    type T = {type_name};
+
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name_1st}__{module_name_2nd}__{type_name}()
         }}
+    }}
+
+    fn as_mut(&mut self) -> &mut Self::T {{
+        self
+    }}
+
+    fn as_ref(&self) -> &Self::T {{
+        self
     }}
 }}
 
