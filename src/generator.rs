@@ -1565,7 +1565,7 @@ pub struct {type_name};
 impl ActionMsg for {type_name} {{
     type Goal = {type_name}_SendGoal;
     type Result = {type_name}_GetResult;
-    type Feedback = {type_name}_Feedback;
+    type Feedback = {type_name}_FeedbackMessage;
     fn type_support() -> *const rcl::rosidl_action_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_action_type_support_handle__{module_name}__action__{type_name}()
