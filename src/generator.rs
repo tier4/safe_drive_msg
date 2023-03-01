@@ -172,7 +172,7 @@ impl<'a> Generator<'a> {
         cargo_toml.write_fmt(format_args!(
             r#"[package]
 name = "{lib}"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -419,7 +419,7 @@ safe_drive = {safe_drive_dep}
         if *idl_type == IDLType::NoType {
             lines.push_front(
                 "use safe_drive::{msg::{ActionMsg, ActionGoal, ActionResult,
-    GoalResponse, GetUUID, ServiceMsg, ResultResponse,
+    GoalResponse, GetUUID, ResultResponse,
     TypeSupport, builtin_interfaces::UnsafeTime}, rcl};"
                     .to_string(),
             );
@@ -1513,7 +1513,7 @@ impl ActionGoal for {type_name}_SendGoal {{
 
 impl GetUUID for {type_name}_SendGoal_Request {{
     fn get_uuid(&self) -> &[u8; 16] {{
-        self.goal_id.uuid
+        &self.goal_id.uuid
     }}
 }}
 
@@ -1555,7 +1555,7 @@ impl ActionResult for {type_name}_GetResult {{
 
 impl GetUUID for {type_name}_GetResult_Request {{
     fn get_uuid(&self) -> &[u8; 16] {{
-        self.goal_id.uuid
+        &self.goal_id.uuid
     }}
 }}
 
@@ -1573,7 +1573,7 @@ fn gen_impl_action_feedback(type_name: &str) -> String {
         "
 impl GetUUID for {type_name} {{
     fn get_uuid(&self) -> &[u8; 16] {{
-        self.goal_id.uuid
+        &self.goal_id.uuid
     }}
 }}"
     )
@@ -1726,7 +1726,7 @@ module example_msg {
             f.write_all(input.as_bytes()).unwrap();
         }
 
-        let mut g = Generator::new(SafeDrive::Version("0.1"));
+        let mut g = Generator::new(SafeDrive::Version("0.2"));
         g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
             .unwrap();
     }
@@ -1763,7 +1763,7 @@ module example_msg {
             f.write_all(input.as_bytes()).unwrap();
         }
 
-        let mut g = Generator::new(SafeDrive::Version("0.1"));
+        let mut g = Generator::new(SafeDrive::Version("0.2"));
         g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
             .unwrap();
     }
@@ -1899,7 +1899,7 @@ module example_msg {
             f.write_all(input.as_bytes()).unwrap();
         }
 
-        let mut g = Generator::new(SafeDrive::Version("0.1"));
+        let mut g = Generator::new(SafeDrive::Version("0.2"));
         g.generate_idl(Path::new("/tmp/safe_drive_msg"), idl_path, "example_msg")
             .unwrap();
     }
