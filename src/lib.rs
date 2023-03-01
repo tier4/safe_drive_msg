@@ -97,7 +97,7 @@ mod tests {
         depends(
             Path::new("/tmp/safe_drive_msg"),
             &["std_msgs"],
-            SafeDrive::Version("0.1"),
+            SafeDrive::Version("0.2"),
         )
         .unwrap();
     }
@@ -107,7 +107,7 @@ mod tests {
         depends(
             Path::new("/tmp/safe_drive_msg"),
             &["std_srvs"],
-            SafeDrive::Version("0.1"),
+            SafeDrive::Version("0.2"),
         )
         .unwrap();
     }
@@ -117,7 +117,7 @@ mod tests {
         depends(
             Path::new("/tmp/safe_drive_msg"),
             &["action_tutorials_interfaces"],
-            SafeDrive::Version("0.1"),
+            SafeDrive::Version("0.2"),
         )
         .unwrap();
     }

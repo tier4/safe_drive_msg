@@ -418,7 +418,10 @@ safe_drive = {safe_drive_dep}
 
         if *idl_type == IDLType::NoType {
             lines.push_front(
-                "use safe_drive::{msg::{ActionMsg, ServiceMsg, TypeSupport}, rcl};".to_string(),
+                "use safe_drive::{msg::{ActionMsg, ActionGoal, ActionResult,
+    GoalResponse, GetUUID, ServiceMsg, ResultResponse,
+    TypeSupport, builtin_interfaces::UnsafeTime}, rcl};"
+                    .to_string(),
             );
             lines.push_back(gen_impl_action_msg(lib, type_str));
         }
@@ -435,8 +438,7 @@ safe_drive = {safe_drive_dep}
                 let response = format!("{type_str}_SendGoal_Response");
                 lines.push_back(gen_impl_for_struct(lib, "action", &response));
 
-                let service = format!("{type_str}_SendGoal");
-                lines.push_back(gen_impl_service_msg(lib, "action", &service));
+                lines.push_back(gen_impl_action_goal(lib, "action", type_str));
             }
             ActionType::Result => {
                 let request = format!("{type_str}_GetResult_Request");
@@ -445,12 +447,12 @@ safe_drive = {safe_drive_dep}
                 let response = format!("{type_str}_GetResult_Response");
                 lines.push_back(gen_impl_for_struct(lib, "action", &response));
 
-                let service = format!("{type_str}_GetResult");
-                lines.push_back(gen_impl_service_msg(lib, "action", &service));
+                lines.push_back(gen_impl_action_result(lib, "action", type_str));
             }
             ActionType::Feedback => {
                 let message = format!("{type_str}_FeedbackMessage");
                 lines.push_back(gen_impl_for_struct(lib, "action", &message));
+                lines.push_back(gen_impl_action_feedback(&message));
             }
         }
 
@@ -1243,20 +1245,10 @@ fn gen_impl_for_msg(module_name: &str, type_name: &str) -> String {
     // generate impl and struct of sequence
     format!(
         "impl TypeSupport for {type_name} {{
-    type T = {type_name};
-
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__msg__{type_name}()
         }}
-    }}
-
-    fn as_mut(&mut self) -> &mut Self::T {{
-        self
-    }}
-
-    fn as_ref(&self) -> &Self::T {{
-        self
     }}
 }}
 
@@ -1338,38 +1330,18 @@ extern \"C\" {{
 }}
 
 impl TypeSupport for {type_name}Request {{
-    type T = {type_name}Request;
-
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Request()
         }}
     }}
-
-    fn as_mut(&mut self) -> &mut Self::T {{
-        self
-    }}
-
-    fn as_ref(&self) -> &Self::T {{
-        self
-    }}
 }}
 
 impl TypeSupport for {type_name}Response {{
-    type T = {type_name}Response;
-
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name}__srv__{type_name}_Response()
         }}
-    }}
-
-    fn as_mut(&mut self) -> &mut Self::T {{
-        self
-    }}
-
-    fn as_ref(&self) -> &Self::T {{
-        self
     }}
 }}
 "
@@ -1390,20 +1362,10 @@ extern \"C\" {{
 }}
 
 impl TypeSupport for {type_name} {{
-    type T = {type_name};
-
     fn type_support() -> *const rcl::rosidl_message_type_support_t {{
         unsafe {{
             rosidl_typesupport_c__get_message_type_support_handle__{module_name_1st}__{module_name_2nd}__{type_name}()
         }}
-    }}
-
-    fn as_mut(&mut self) -> &mut Self::T {{
-        self
-    }}
-
-    fn as_ref(&self) -> &Self::T {{
-        self
     }}
 }}
 
@@ -1527,6 +1489,94 @@ impl<const N: usize> Drop for {type_name}Seq<N> {{
 
 unsafe impl<const N: usize> Send for {type_name}Seq<N> {{}}
 unsafe impl<const N: usize> Sync for {type_name}Seq<N> {{}}")
+}
+
+fn gen_impl_action_goal(module_name: &str, module_2nd: &str, type_name: &str) -> String {
+    format!(
+        "
+extern \"C\" {{
+    fn rosidl_typesupport_c__get_service_type_support_handle__{module_name}__{module_2nd}__{type_name}_SendGoal() -> *const rcl::rosidl_service_type_support_t;
+}}
+
+#[derive(Debug)]
+pub struct {type_name}_SendGoal;
+
+impl ActionGoal for {type_name}_SendGoal {{
+    type Request = {type_name}_SendGoal_Request;
+    type Response = {type_name}_SendGoal_Response;
+    fn type_support() -> *const rcl::rosidl_service_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_service_type_support_handle__{module_name}__{module_2nd}__{type_name}_SendGoal()
+        }}
+    }}
+}}
+
+impl GetUUID for {type_name}_SendGoal_Request {{
+    fn get_uuid(&self) -> &[u8; 16] {{
+        self.goal_id.uuid
+    }}
+}}
+
+impl GoalResponse for {type_name}_SendGoal_Response {{
+    fn is_accepted(&self) -> bool {{
+        self.accepted
+    }}
+
+    fn get_time_stamp(&self) -> UnsafeTime {{
+        UnsafeTime {{
+            sec: self.stamp.sec,
+            nanosec: self.stamp.nanosec,
+        }}
+    }}
+}}
+"
+    )
+}
+
+fn gen_impl_action_result(module_name: &str, module_2nd: &str, type_name: &str) -> String {
+    format!(
+        "
+extern \"C\" {{
+    fn rosidl_typesupport_c__get_service_type_support_handle__{module_name}__{module_2nd}__{type_name}_GetResult() -> *const rcl::rosidl_service_type_support_t;
+}}
+
+#[derive(Debug)]
+pub struct {type_name}_GetResult;
+
+impl ActionResult for {type_name}_GetResult {{
+    type Request = {type_name}_GetResult_Request;
+    type Response = {type_name}_GetResult_Response;
+    fn type_support() -> *const rcl::rosidl_service_type_support_t {{
+        unsafe {{
+            rosidl_typesupport_c__get_service_type_support_handle__{module_name}__{module_2nd}__{type_name}_GetResult()
+        }}
+    }}
+}}
+
+impl GetUUID for {type_name}_GetResult_Request {{
+    fn get_uuid(&self) -> &[u8; 16] {{
+        self.goal_id.uuid
+    }}
+}}
+
+impl ResultResponse for {type_name}_GetResult_Response {{
+    fn get_status(&self) -> u8 {{
+        self.status
+    }}
+}}
+"
+    )
+}
+
+fn gen_impl_action_feedback(type_name: &str) -> String {
+    format!(
+        "
+impl GetUUID for {type_name} {{
+    fn get_uuid(&self) -> &[u8; 16] {{
+        self.goal_id.uuid
+    }}
+}}"
+    )
 }
 
 fn gen_impl_service_msg(module_name: &str, module_2nd: &str, type_name: &str) -> String {
