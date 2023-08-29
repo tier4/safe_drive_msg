@@ -418,9 +418,7 @@ safe_drive = {safe_drive_dep}
 
         if *idl_type == IDLType::NoType {
             lines.push_front(
-                "use safe_drive::{msg::{ActionMsg, ActionGoal, ActionResult,
-    GoalResponse, GetUUID, ResultResponse,
-    TypeSupport, builtin_interfaces::UnsafeTime}, rcl};"
+                "use safe_drive::{msg::{ActionMsg, ActionGoal, ActionResult, GetUUID, GoalResponse, ResultResponse, TypeSupport, builtin_interfaces::UnsafeTime, unique_identifier_msgs}, rcl};"
                     .to_string(),
             );
             lines.push_back(gen_impl_action_msg(lib, type_str));
@@ -1528,6 +1526,10 @@ impl GoalResponse for {type_name}_SendGoal_Response {{
             nanosec: self.stamp.nanosec,
         }}
     }}
+
+    fn new(accepted: bool, stamp: UnsafeTime) -> Self {{
+        Self {{ accepted, stamp }}
+    }}
 }}
 "
     )
@@ -1621,6 +1623,36 @@ impl ActionMsg for {type_name} {{
             rosidl_typesupport_c__get_action_type_support_handle__{module_name}__action__{type_name}()
         }}
     }}
+
+    type GoalContent = {type_name}_Goal;
+
+    fn new_goal_request(
+        goal: Self::GoalContent,
+        uuid: [u8; 16],
+    ) -> <Self::Goal as ActionGoal>::Request {{
+        {type_name}_SendGoal_Request {{
+            goal,
+            goal_id: unique_identifier_msgs::msg::UUID {{ uuid }},
+        }}
+    }}
+
+    type ResultContent = {type_name}_Result;
+
+    fn new_result_response(
+        status: u8,
+        result: Self::ResultContent,
+    ) -> <Self::Result as ActionResult>::Response {{
+        {type_name}_GetResult_Response {{ status, result }}
+    }}
+
+    type FeedbackContent = {type_name}_Feedback;
+
+    fn new_feedback_message(feedback: Self::FeedbackContent, uuid: [u8; 16]) -> Self::Feedback {{
+        {type_name}_FeedbackMessage {{
+            feedback,
+            goal_id: unique_identifier_msgs::msg::UUID {{ uuid }},
+        }}
+    }}
 }}
 
 #[repr(C)]
@@ -1634,7 +1666,7 @@ pub struct {type_name}_SendGoal_Request {{
 #[derive(Debug)]
 pub struct {type_name}_SendGoal_Response {{
     pub accepted: bool,
-    pub stamp: builtin_interfaces::msg::Time,
+    pub stamp: UnsafeTime,
 }}
 
 #[repr(C)]
