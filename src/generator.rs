@@ -1828,9 +1828,9 @@ module example_msg {
 
         @verbatim (language="comment", text="http://wiki.ros.org/msg")
         struct StdMsg {
-            boolean a;
+            boolean bool;
 
-            int8 b;
+            int8 i8;
 
             uint8 c;
 

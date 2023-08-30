@@ -8,7 +8,7 @@ use safe_drive_msg;
 use std::path::Path;
 
 let dependencies = ["std_msgs", "std_srvs"];
-safe_drive_msg::depends(&Path::new("/tmp/output_dir"), &dependencies, safe_drive_msg::SafeDrive::Version("0.1"));
+safe_drive_msg::depends(&Path::new("/tmp/output_dir"), &dependencies, safe_drive_msg::SafeDrive::Version("0.2"));
 ```
 
 ## Limitation
