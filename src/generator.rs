@@ -277,7 +277,7 @@ safe_drive = {safe_drive_dep}
         };
 
         let snake_type_name = &rs_type_name.to_case(Case::Snake);
-        let rs_module = mangle(snake_type_name);
+        let rs_module = mangle_mod(&snake_type_name);
         let rs_file = format!("{rs_module}.rs");
 
         let out_file = match idl_type {
@@ -519,7 +519,7 @@ safe_drive = {safe_drive_dep}
         module: Module,
         lib: &str,
     ) -> Result<(), DynError> {
-        lines.push_back(format!("\npub mod {} {{", mangle(&module.id)));
+        lines.push_back(format!("\npub mod {} {{", mangle_mod(&module.id)));
 
         for expr in module.definitions.iter() {
             if let Definition::Const(const_expr) = &expr.definition {
@@ -565,12 +565,12 @@ safe_drive = {safe_drive_dep}
         for declarator in member.declarators.iter() {
             match declarator {
                 AnyDeclarator::Simple(id) => {
-                    let id = mangle(&id);
+                    let id = mangle_type(&id);
                     lines.push_back(format!("    pub {id}: {type_str},"));
                 }
                 AnyDeclarator::Array(dcl) => {
                     let size = idl_array_size(dcl);
-                    let id = mangle(&dcl.id);
+                    let id = mangle_type(&dcl.id);
                     lines.push_back(format!("    pub {id}: [{type_str}; {size}],"));
                 }
             }
@@ -695,11 +695,11 @@ safe_drive = {safe_drive_dep}
         for dcls in typedef.declarators.iter() {
             match dcls {
                 AnyDeclarator::Simple(id) => {
-                    result.push_back(format!("\npub type {id} = {type_str};"));
+                    result.push_back(format!("\ntype {id} = {type_str};"));
                 }
                 AnyDeclarator::Array(dcl) => {
                     let size = idl_array_size(dcl);
-                    result.push_back(format!("\npub type {} = [{type_str}; {size}];", dcl.id));
+                    result.push_back(format!("\ntype {} = [{type_str}; {size}];", dcl.id));
                 }
             }
         }
@@ -709,7 +709,7 @@ safe_drive = {safe_drive_dep}
 
     fn idl_scoped_name(&mut self, name: &ScopedName, lib: &str) -> String {
         fn mangle_vec(v: &[String]) -> String {
-            let v: Vec<_> = v.iter().map(|s| mangle(s).to_string()).collect();
+            let v: Vec<_> = v.iter().map(|s| mangle_mod(s).to_string()).collect();
             v.join("::")
         }
 
@@ -723,7 +723,7 @@ safe_drive = {safe_drive_dep}
                     let tail = mangle_vec(&v[1..]);
                     format!("crate::{tail}")
                 } else {
-                    let module_name = mangle(&v[0]);
+                    let module_name = mangle_mod(&v[0]);
                     self.dependencies.insert(module_name.to_string());
                     let tail = mangle_vec(&v[1..]);
                     format!("{module_name}::{tail}")
@@ -859,7 +859,7 @@ safe_drive = {safe_drive_dep}
                 let scope = if scope == lib {
                     "crate".into()
                 } else {
-                    let s = mangle(scope);
+                    let s = mangle_mod(scope);
                     self.dependencies.insert(s.to_string());
                     s
                 };
@@ -867,7 +867,7 @@ safe_drive = {safe_drive_dep}
                 match array_info {
                     ArrayInfo::NotArray => {
                         let module_name = type_name.to_case(Case::Snake);
-                        let module_name = mangle(&module_name);
+                        let module_name = mangle_mod(&module_name);
                         format!("{var_name}: {scope}::msg::{module_name}::{type_name}")
                     }
                     ArrayInfo::Dynamic => {
@@ -880,7 +880,7 @@ safe_drive = {safe_drive_dep}
                     }
                     ArrayInfo::Static(size) => {
                         let module_name = type_name.to_case(Case::Snake);
-                        let module_name = mangle(&module_name);
+                        let module_name = mangle_mod(&module_name);
                         format!("{var_name}: [{scope}::msg::{module_name}::{type_name}; {size}]")
                     }
                 }
@@ -1041,7 +1041,7 @@ fn module_file_type(path: &Path) -> Result<(String, PathBuf, String), DynError> 
         .collect();
     let camel_file_name = names[0];
     let module_name = camel_file_name.to_case(Case::Snake);
-    let module_name = mangle(&module_name);
+    let module_name = mangle_mod(&module_name);
 
     // "{snake_file_name}.rs"
     let rs_file = format!("{module_name}.rs");
@@ -1053,18 +1053,29 @@ fn module_file_type(path: &Path) -> Result<(String, PathBuf, String), DynError> 
     Ok((module_name.to_string(), rs_file.to_owned(), rs_type_name))
 }
 
-fn mangle(var_name: &str) -> Cow<'_, str> {
+fn mangle_type(var_name: &str) -> Cow<'_, str> {
     match var_name {
         "type" | "pub" | "fn" | "match" | "if" | "while" | "break" | "continue" | "unsafe"
         | "async" | "move" | "trait" | "impl" | "for" | "i8" | "u8" | "i16" | "u16" | "i32"
-        | "u32" | "i64" | "u64" | "bool" | "char" => format!("{var_name}_").into(),
+        | "u32" | "i64" | "u64" | "bool" | "char" | "override" | "abstract" | "become"
+        | "final" | "macro" | "unsized" => format!("r#{var_name}").into(),
+        _ => var_name.into(),
+    }
+}
+
+fn mangle_mod(var_name: &str) -> Cow<'_, str> {
+    match var_name {
+        "type" | "pub" | "fn" | "match" | "if" | "while" | "break" | "continue" | "unsafe"
+        | "async" | "move" | "trait" | "impl" | "for" | "i8" | "u8" | "i16" | "u16" | "i32"
+        | "u32" | "i64" | "u64" | "bool" | "char" | "override" | "abstract" | "become"
+        | "final" | "macro" | "unsized" => format!("{var_name}_").into(),
         _ => var_name.into(),
     }
 }
 
 fn gen_seq_type(scope: &str, type_str: &str, size: usize) -> String {
     let module_name = type_str.to_case(Case::Snake);
-    let module_name = mangle(&module_name);
+    let module_name = mangle_mod(&module_name);
     match type_str {
         "bool" => format!("safe_drive::msg::BoolSeq<{size}>"),
         "byte" | "uint8" => format!("safe_drive::msg::I8Seq<{size}>"),
@@ -1096,7 +1107,7 @@ fn gen_type(type_str: &str) -> Cow<'_, str> {
         "float64" => "f64".into(),
         _ => {
             let mod_file = type_str.to_case(Case::Snake);
-            let mod_file = mangle(&mod_file);
+            let mod_file = mangle_mod(&mod_file);
             format!("crate::msg::{mod_file}::{type_str}").into()
         }
     }
