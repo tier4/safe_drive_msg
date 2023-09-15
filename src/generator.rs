@@ -42,6 +42,14 @@ enum IDLType {
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn to_slash(path: &str) -> Cow<'_, str> {
+    if cfg!(target_os = "windows") {
+        Cow::Owned(path.replace(std::path::MAIN_SEPARATOR, "/"))
+    } else {
+        Cow::Borrowed(path)
+    }
+}
+
 impl<'a> Generator<'a> {
     pub fn new(safe_drive: SafeDrive<'a>) -> Self {
         Self {
@@ -135,8 +143,35 @@ impl<'a> Generator<'a> {
 
     fn generate_build_rs(&self, out_dir: &Path, lib: &str) -> Result<(), DynError> {
         let mut build_rs = File::create(out_dir.join(lib).join("build.rs"))?;
+        if cfg!(target_os = "windows") {
+            build_rs.write_fmt(format_args!(
+            r#"fn main() {{
+    println!("cargo:rustc-link-lib={lib}__rosidl_typesupport_c");
+    println!("cargo:rustc-link-lib={lib}__rosidl_generator_c");
 
-        build_rs.write_fmt(format_args!(
+    if let Some(e) = std::env::var_os("AMENT_PREFIX_PATH") {{
+        let env = e.to_str().unwrap();
+        for path in env.split(';') {{
+            let p = std::path::Path::new(path).join("Lib");
+            if p.exists() {{
+                println!("cargo:rustc-link-search={{}}", p.as_path().to_str().unwrap());
+            }}
+        }}
+    }}
+    if let Some(e) = std::env::var_os("CMAKE_PREFIX_PATH") {{
+        let env = e.to_str().unwrap();
+        for path in env.split(';') {{
+            let p = std::path::Path::new(path).join("lib");
+            if p.exists() {{
+                println!("cargo:rustc-link-search={{}}", p.as_path().to_str().unwrap());
+            }}
+        }}
+    }}
+}}
+"#
+                ))?;
+        } else {
+            build_rs.write_fmt(format_args!(
             r#"fn main() {{
     println!("cargo:rustc-link-lib={lib}__rosidl_typesupport_c");
     println!("cargo:rustc-link-lib={lib}__rosidl_generator_c");
@@ -149,8 +184,8 @@ impl<'a> Generator<'a> {
     }}
 }}
 "#
-        ))?;
-
+            ))?;
+        }
         Ok(())
     }
 
@@ -160,7 +195,8 @@ impl<'a> Generator<'a> {
         let safe_drive_dep = match &self.safe_drive {
             SafeDrive::Path(s) => {
                 format!(
-                    "{{ path = \"{s}\", default-features = false, features = [\"{ros2ver}\"] }}"
+                    "{{ path = \"{}\", default-features = false, features = [\"{ros2ver}\"] }}",
+                    to_slash(s).as_ref()
                 )
             }
             SafeDrive::Version(s) => format!(
@@ -187,7 +223,7 @@ safe_drive = {safe_drive_dep}
             cargo_toml.write_fmt(format_args!(
                 r#"{dependency} = {{ path = "{}" }}
 "#,
-                path.to_str().unwrap()
+                to_slash(path.to_str().unwrap()).as_ref()
             ))?;
         }
 
@@ -215,7 +251,7 @@ safe_drive = {safe_drive_dep}
                             if let Some(stem) = path.file_stem() {
                                 let idl_file = format!("{}.idl", stem.to_str().unwrap());
                                 let idl_file = path.parent().unwrap().join(idl_file);
-                                if !idl_file.exists() {
+                                if !cfg!(target_os = "windows") && !idl_file.exists() {
                                     self.generate_msg(out_dir, path, lib)?;
                                 }
                             }
@@ -225,7 +261,7 @@ safe_drive = {safe_drive_dep}
                                 let idl_file = format!("{}.idl", stem.to_str().unwrap());
                                 let idl_file = path.parent().unwrap().join(idl_file);
                                 let idl_file = Path::new(&idl_file);
-                                if !idl_file.exists() {
+                                if !cfg!(target_os = "windows") && !idl_file.exists() {
                                     self.generate_srv(out_dir, path, lib)?;
                                 }
                             }
@@ -277,7 +313,7 @@ safe_drive = {safe_drive_dep}
         };
 
         let snake_type_name = &rs_type_name.to_case(Case::Snake);
-        let rs_module = mangle_mod(&snake_type_name);
+        let rs_module = mangle_mod(snake_type_name);
         let rs_file = format!("{rs_module}.rs");
 
         let out_file = match idl_type {
@@ -351,7 +387,7 @@ safe_drive = {safe_drive_dep}
         struct_def: &StructDef,
         lib: &str,
     ) {
-        self.idl_struct(lines, &struct_def, lib);
+        self.idl_struct(lines, struct_def, lib);
         lines.push_back(gen_impl_for_struct(lib, "msg", &struct_def.id));
 
         lines.push_front("use safe_drive::{msg::TypeSupport, rcl};".into());
