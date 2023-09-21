@@ -14,6 +14,11 @@ use std::{
 
 pub type DynError = Box<dyn Error + Send + Sync + 'static>;
 
+#[cfg(target_os = "windows")]
+const SEP: char = ';';
+#[cfg(not(target_os = "windows"))]
+const SEP: char = ':';
+
 #[derive(Debug, Clone, Copy)]
 pub enum SafeDrive<'a> {
     Path(&'a str),
@@ -34,16 +39,27 @@ pub enum SafeDrive<'a> {
 /// ```
 pub fn depends(outdir: &Path, libs: &[&str], safe_drive: SafeDrive) -> Result<(), DynError> {
     let ament_paths = std::env::var("AMENT_PREFIX_PATH")?;
-    let ament_paths: Vec<_> = ament_paths
-        .split(':')
+    let mut ament_paths: Vec<_> = ament_paths
+        .split(SEP)
+        .filter(|&p| p.len() > 0)
         .map(|p| std::path::Path::new(p).join("share"))
         .collect();
-
+    if cfg!(target_os = "windows") {
+        let cmake_paths_env = std::env::var("CMAKE_PREFIX_PATH");
+        if let Ok(cmake_paths) = cmake_paths_env {
+            let cmake_paths = cmake_paths
+                .split(SEP)
+                .filter(|&p| p.len() > 0)
+                .map(|p| std::path::Path::new(p).join("share"));
+            ament_paths.extend(cmake_paths);
+        }
+    }
     let libs: BTreeSet<_> = libs.iter().map(|e| e.to_string()).collect();
 
     std::fs::create_dir_all(outdir)?;
 
-    generate_libs(outdir, &ament_paths, &libs, safe_drive)
+    generate_libs(outdir, &ament_paths, &libs, safe_drive)?;
+    Ok(())
 }
 
 fn generate_libs(
