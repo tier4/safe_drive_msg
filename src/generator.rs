@@ -145,7 +145,7 @@ impl<'a> Generator<'a> {
         let mut build_rs = File::create(out_dir.join(lib).join("build.rs"))?;
         if cfg!(target_os = "windows") {
             build_rs.write_fmt(format_args!(
-            r#"fn main() {{
+                r#"fn main() {{
     println!("cargo:rustc-link-lib={lib}__rosidl_typesupport_c");
     println!("cargo:rustc-link-lib={lib}__rosidl_generator_c");
 
@@ -169,10 +169,10 @@ impl<'a> Generator<'a> {
     }}
 }}
 "#
-                ))?;
+            ))?;
         } else {
             build_rs.write_fmt(format_args!(
-            r#"fn main() {{
+                r#"fn main() {{
     println!("cargo:rustc-link-lib={lib}__rosidl_typesupport_c");
     println!("cargo:rustc-link-lib={lib}__rosidl_generator_c");
 
@@ -1206,7 +1206,7 @@ impl<const N: usize> {type_name_full}Seq<N> {{
     /// `N` represents the maximum number of elements.
     /// If `N` is `0`, the sequence is unlimited.
     pub fn new(size: usize) -> Option<Self> {{
-        if N != 0 && size >= N {{
+        if N != 0 && size > N {{
             // the size exceeds in the maximum number
             return None;
         }}
@@ -1473,7 +1473,7 @@ impl<const N: usize> {type_name}Seq<N> {{
     /// `N` represents the maximum number of elements.
     /// If `N` is `0`, the sequence is unlimited.
     pub fn new(size: usize) -> Option<Self> {{
-        if N != 0 && size >= N {{
+        if N != 0 && size > N {{
             // the size exceeds in the maximum number
             return None;
         }}

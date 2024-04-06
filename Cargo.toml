@@ -1,13 +1,13 @@
 [package]
 name = "safe_drive_msg"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
-authors = [ "Yuuki Takano <yuuki.takano@tier4.jp>, TIER IV, Inc." ]
+authors = ["Yuuki Takano <yuuki.takano@tier4.jp>, TIER IV, Inc."]
 description = "A transpiler from ROS2's message types to Rust's types."
 license-file = "LICENSE"
 readme = "README.md"
-keywords = ["ROS2", "robotics" ]
-categories = [ "science::robotics" ]
+keywords = ["ROS2", "robotics"]
+categories = ["science::robotics"]
 repository = "https://github.com/tier4/safe_drive_msg"
 homepage = "https://github.com/tier4/safe_drive_msg"
 
