@@ -390,7 +390,7 @@ safe_drive = {safe_drive_dep}
         self.idl_struct(lines, struct_def, lib);
         lines.push_back(gen_impl_for_struct(lib, "msg", &struct_def.id));
 
-        lines.push_front("use safe_drive::{msg::TypeSupport, rcl};".into());
+        lines.push_front("use safe_drive::{msg::TypeSupport, rcl::{self, size_t}};".into());
     }
 
     fn generate_idl_srv(
@@ -1186,8 +1186,8 @@ impl Drop for {type_name_full} {{
 #[derive(Debug)]
 struct {type_name_full}SeqRaw {{
     data: *mut {type_name_full},
-    size: usize,
-    capacity: usize,
+    size: size_t,
+    capacity: size_t,
 }}
 
 /// Sequence of {type_name_full}.
@@ -1197,8 +1197,8 @@ struct {type_name_full}SeqRaw {{
 #[derive(Debug)]
 pub struct {type_name_full}Seq<const N: usize> {{
     data: *mut {type_name_full},
-    size: usize,
-    capacity: usize,
+    size: size_t,
+    capacity: size_t,
 }}
 
 impl<const N: usize> {type_name_full}Seq<N> {{
@@ -1227,7 +1227,7 @@ impl<const N: usize> {type_name_full}Seq<N> {{
         if self.data.is_null() {{
             &[]
         }} else {{
-            let s = unsafe {{ std::slice::from_raw_parts(self.data, self.size) }};
+            let s = unsafe {{ std::slice::from_raw_parts(self.data, self.size as _) }};
             s
         }}
     }}
@@ -1236,7 +1236,7 @@ impl<const N: usize> {type_name_full}Seq<N> {{
         if self.data.is_null() {{
             &mut []
         }} else {{
-            let s = unsafe {{ std::slice::from_raw_parts_mut(self.data, self.size) }};
+            let s = unsafe {{ std::slice::from_raw_parts_mut(self.data, self.size as _) }};
             s
         }}
     }}
@@ -1453,8 +1453,8 @@ impl Drop for {type_name} {{
 #[derive(Debug)]
 struct {type_name}SeqRaw {{
     data: *mut {type_name},
-    size: usize,
-    capacity: usize,
+    size: size_t,
+    capacity: size_t,
 }}
 
 /// Sequence of {type_name}.
@@ -1464,8 +1464,8 @@ struct {type_name}SeqRaw {{
 #[derive(Debug)]
 pub struct {type_name}Seq<const N: usize> {{
     data: *mut {type_name},
-    size: usize,
-    capacity: usize,
+    size: size_t,
+    capacity: size_t,
 }}
 
 impl<const N: usize> {type_name}Seq<N> {{
@@ -1494,7 +1494,7 @@ impl<const N: usize> {type_name}Seq<N> {{
         if self.data.is_null() {{
             &[]
         }} else {{
-            let s = unsafe {{ std::slice::from_raw_parts(self.data, self.size) }};
+            let s = unsafe {{ std::slice::from_raw_parts(self.data, self.size as _) }};
             s
         }}
     }}
@@ -1503,7 +1503,7 @@ impl<const N: usize> {type_name}Seq<N> {{
         if self.data.is_null() {{
             &mut []
         }} else {{
-            let s = unsafe {{ std::slice::from_raw_parts_mut(self.data, self.size) }};
+            let s = unsafe {{ std::slice::from_raw_parts_mut(self.data, self.size as _) }};
             s
         }}
     }}
