@@ -97,8 +97,8 @@ impl<'a> Generator<'a> {
         let mut lib_file = File::create(src_dir.join("lib.rs")).unwrap();
 
         if !self.msgs.is_empty() {
-            lib_file.write("#[allow(non_camel_case_types)]\n".as_bytes())?;
-            lib_file.write("#[allow(non_snake_case)]\n".as_bytes())?;
+            lib_file.write_all("#[allow(non_camel_case_types)]\n".as_bytes())?;
+            lib_file.write_all("#[allow(non_snake_case)]\n".as_bytes())?;
             lib_file.write_fmt(format_args!("pub mod msg;\n"))?;
 
             let mut msg_file = File::create(src_dir.join("msg.rs"))?;
@@ -109,8 +109,8 @@ impl<'a> Generator<'a> {
         }
 
         if !self.srvs.is_empty() {
-            lib_file.write("#[allow(non_camel_case_types)]\n".as_bytes())?;
-            lib_file.write("#[allow(non_snake_case)]\n".as_bytes())?;
+            lib_file.write_all("#[allow(non_camel_case_types)]\n".as_bytes())?;
+            lib_file.write_all("#[allow(non_snake_case)]\n".as_bytes())?;
             lib_file.write_fmt(format_args!("pub mod srv;\n"))?;
 
             let mut srv_file = File::create(src_dir.join("srv.rs"))?;
@@ -121,8 +121,8 @@ impl<'a> Generator<'a> {
         }
 
         if !self.actions.is_empty() {
-            lib_file.write("#[allow(non_camel_case_types)]\n".as_bytes())?;
-            lib_file.write("#[allow(non_snake_case)]\n".as_bytes())?;
+            lib_file.write_all("#[allow(non_camel_case_types)]\n".as_bytes())?;
+            lib_file.write_all("#[allow(non_snake_case)]\n".as_bytes())?;
             lib_file.write_fmt(format_args!("pub mod action;\n"))?;
 
             let mut action_file = File::create(src_dir.join("action.rs"))?;
@@ -409,12 +409,15 @@ safe_drive = {safe_drive_dep}
         };
 
         if *idl_type == IDLType::NoType {
-            lines.push_front("use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};".to_string());
+            lines.push_front(
+                "use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl::{self, size_t}};"
+                    .to_string(),
+            );
             lines.push_back(gen_impl_service_msg(lib, "srv", type_str));
         }
 
         // Generate struct.
-        self.idl_struct(lines, &struct_def, lib);
+        self.idl_struct(lines, struct_def, lib);
         lines.push_back(gen_impl_for_struct(lib, "srv", &struct_def.id));
 
         IDLType::Srv(type_str.to_string())
@@ -454,14 +457,14 @@ safe_drive = {safe_drive_dep}
 
         if *idl_type == IDLType::NoType {
             lines.push_front(
-                "use safe_drive::{msg::{ActionMsg, ActionGoal, ActionResult, GetUUID, GoalResponse, ResultResponse, TypeSupport, builtin_interfaces::UnsafeTime, unique_identifier_msgs}, rcl};"
+                "use safe_drive::{msg::{ActionMsg, ActionGoal, ActionResult, GetUUID, GoalResponse, ResultResponse, TypeSupport, builtin_interfaces::UnsafeTime, unique_identifier_msgs}, rcl::{self, size_t}};"
                     .to_string(),
             );
             lines.push_back(gen_impl_action_msg(lib, type_str));
         }
 
         // Generate struct.
-        self.idl_struct(lines, &struct_def, lib);
+        self.idl_struct(lines, struct_def, lib);
         lines.push_back(gen_impl_for_struct(lib, "action", &struct_def.id));
 
         match suffix {
@@ -601,7 +604,7 @@ safe_drive = {safe_drive_dep}
         for declarator in member.declarators.iter() {
             match declarator {
                 AnyDeclarator::Simple(id) => {
-                    let id = mangle_type(&id);
+                    let id = mangle_type(id);
                     lines.push_back(format!("    pub {id}: {type_str},"));
                 }
                 AnyDeclarator::Array(dcl) => {
@@ -794,14 +797,14 @@ safe_drive = {safe_drive_dep}
         self.generate_exprs(&exprs, &mut lines, lib, &rs_type_name, MsgType::Msg);
 
         lines.push_back(gen_impl_for_msg(lib, &rs_type_name).into());
-        lines.push_front("use safe_drive::{msg::TypeSupport, rcl};".into());
+        lines.push_front("use safe_drive::{msg::TypeSupport, rcl::{self, size_t}};".into());
 
         // Create a directory.
         let out_dir = out_lib_dir.join(lib).join("src").join("msg");
         std::fs::create_dir_all(&out_dir)?;
 
         // Write.
-        let out_file = out_dir.join(&rs_file);
+        let out_file = out_dir.join(rs_file);
         let mut f = File::create(out_file)?;
         for line in lines {
             f.write_fmt(format_args!("{}\n", line))?;
@@ -849,14 +852,16 @@ safe_drive = {safe_drive_dep}
         );
 
         lines.push_back(gen_impl_for_srv(lib, &rs_type_name).into());
-        lines.push_front("use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl};".into());
+        lines.push_front(
+            "use safe_drive::{msg::{ServiceMsg, TypeSupport}, rcl::{self, size_t}};".into(),
+        );
 
         // Create a directory.
         let out_dir = out_lib_dir.join(lib).join("src").join("srv");
         std::fs::create_dir_all(&out_dir)?;
 
         // Write.
-        let out_file = out_dir.join(&rs_file);
+        let out_file = out_dir.join(rs_file);
         let mut f = File::create(out_file)?;
         for line in lines {
             f.write_fmt(format_args!("{}\n", line))?;
